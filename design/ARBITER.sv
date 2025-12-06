@@ -20,12 +20,16 @@ module rr_arbiter #(
 
     // 2. Fixed Priority Logic (Helper)
     // Returns a grant for the lowest index bit set in the input vector.
-    // Example: input 0110 -> output 0010
+    // FIX: Uses an iterative flag instead of variable slice r[i-1:0]
     function automatic logic [CLIENTS-1:0] get_priority_gnt(logic [CLIENTS-1:0] r);
         logic [CLIENTS-1:0] g;
-        g[0] = r[0];
-        for (int i = 1; i < CLIENTS; i++) begin
-            g[i] = r[i] & ~|r[i-1:0];
+        logic seen_req;
+
+        seen_req = 1'b0;
+
+        for (int i = 0; i < CLIENTS; i++) begin
+            g[i] = r[i] && !seen_req;
+            if (r[i]) seen_req = 1'b1;
         end
         return g;
     endfunction
@@ -50,14 +54,12 @@ module rr_arbiter #(
         next_mask = mask;
         if (|gnt) begin
             // If Client k is granted, mask becomes 111...000 (0s up to k, 1s after)
-            // Example: CLIENTS=4, gnt=0010 (Client 1) -> mask should become 1100
             for (int i = 0; i < CLIENTS; i++) begin
                 if (gnt[i]) begin
                     next_mask = '1 << (i + 1);
                 end
             end
         end 
-        // If no grant, mask stays same or resets if needed (handled by logic)
     end
 
     always_ff @(posedge clk or negedge rst_n) begin
