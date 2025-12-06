@@ -79,64 +79,66 @@ def extract_signal_info(rtl_code: str) -> tuple:
                 'type': param_type.strip() if param_type.strip() else 'int'
             })
 
-    # Extract all port names from module declaration
-    module_port_list = []
-    module_decl_match = re.search(r'module\s+\w+\s*\((.*?)\);', rtl_code, re.DOTALL)
+    # Extract port declarations (input, output)
+    inputs = []
+    outputs = []
+    all_ports = [] # To store all port dictionaries
+
+    # Regex to find the port list, handling optional parameters block
+    module_decl_match = re.search(r'module\s+\w+\s*(?:#\s*\([^)]*\))?\s*\((.*?)\);', rtl_code, re.DOTALL)
     if module_decl_match:
         port_list_str = module_decl_match.group(1)
-        # Split by comma and clean up
-        module_port_list = [p.strip() for p in port_list_str.split(',') if p.strip()]
+        # Split by comma to get individual port declarations
+        individual_ports = [p.strip() for p in port_list_str.split(',') if p.strip()]
 
-    # Extract inputs (handle multiple names on one line)
-    inputs = []
-    input_names_seen = set()
-    # Match input declarations that may have multiple signals
-    input_lines = re.findall(r'input\s+(?:wire\s+|reg\s+)?(\[[\w\-:+\s\$]+\])?\s*([^;]+);', rtl_code)
-    for match in input_lines:
-        width, names_str = match
-        # Split by comma to handle multiple signal names
-        signal_names = [n.strip() for n in names_str.split(',')]
-        for name in signal_names:
-            if name and name not in input_names_seen:
-                input_names_seen.add(name)
+        for port_decl in individual_ports:
+            # Try to match input ports
+            input_match = re.match(r'input\s+(?:logic|wire|reg)?\s*(\[[\w\-:+\s\$]+\])?\s*(\w+)', port_decl)
+            if input_match:
+                width = input_match.group(1)
+                name = input_match.group(2)
                 inputs.append({'name': name, 'width': width.strip() if width else ''})
+                all_ports.append({'name': name, 'width': width.strip() if width else '', 'direction': 'input'})
+                continue
 
-    # Extract outputs (handle multiple names on one line)
-    outputs = []
-    output_names_seen = set()
-    output_lines = re.findall(r'output\s+(reg|wire)?\s*(\[[\w\-:+\s\$]+\])?\s*([^;]+);', rtl_code)
-    for match in output_lines:
-        out_type, width, names_str = match
-        # Split by comma to handle multiple signal names
-        signal_names = [n.strip() for n in names_str.split(',')]
-        for name in signal_names:
-            if name and name not in output_names_seen:
-                output_names_seen.add(name)
-                outputs.append({
-                    'name': name,
-                    'width': width.strip() if width else '',
-                    'type': out_type if out_type else 'wire'
-                })
+            # Try to match output ports
+            output_match = re.match(r'output\s+(?:logic|wire|reg)?\s*(\[[\w\-:+\s\$]+\])?\s*(\w+)', port_decl)
+            if output_match:
+                width = output_match.group(1)
+                name = output_match.group(2)
+                outputs.append({'name': name, 'width': width.strip() if width else ''})
+                all_ports.append({'name': name, 'width': width.strip() if width else '', 'direction': 'output'})
+                continue
+
+            # If it's not explicitly input/output, it might be an inout or implicitly declared
+            # For simplicity, we'll try to extract just the name if not matched yet
+            name_match = re.match(r'(?:logic|wire|reg)?\s*(\[[\w\-:+\s\$]+\])?\s*(\w+)', port_decl)
+            if name_match:
+                width = name_match.group(1)
+                name = name_match.group(2)
+                # If not already added as input/output, assume it's part of all_ports for now
+                if name not in {p['name'] for p in all_ports}:
+                    all_ports.append({'name': name, 'width': width.strip() if width else '', 'direction': 'inout/implicit'})
 
     # Extract internal registers and wires
     internals = []
+    # Collect all port names for exclusion from internal signals
+    port_names_set = {p['name'] for p in all_ports}
+    
     internal_patterns = [
-        r'(?:^|\n)\s*reg\s+(\[[\w\-:+\s]+\])?\s*(\w+)',
-        r'(?:^|\n)\s*wire\s+(\[[\w\-:+\s]+\])?\s*(\w+)'
+        r'(?:^|\n)\s*reg\s+(\[[\w\-:+\s]+\])?\s*(\w+)\s*[^;]*;',
+        r'(?:^|\n)\s*wire\s+(\[[\w\-:+\s]+\])?\s*(\w+)\s*[^;]*;'
     ]
-    output_names = [o['name'] for o in outputs]
     for pattern in internal_patterns:
         matches = re.findall(pattern, rtl_code, re.MULTILINE)
         for match in matches:
             width, name = match
-            if name not in output_names and name not in [i['name'] for i in internals]:
+            # Ensure it's not a port or a parameter
+            if name not in port_names_set and name not in param_names_seen and name not in {i['name'] for i in internals}:
                 internals.append({
                     'name': name,
                     'width': width.strip() if width else ''
                 })
-
-    # Build all ports list
-    all_ports = inputs + outputs
 
     signal_info = f"""
 Module: {module_name}
@@ -414,12 +416,13 @@ def validate_signals_exist(assertion: str, ports: List[dict], internals: List[di
     # Look for identifiers (word characters) that could be signals
     # Skip SystemVerilog keywords and system functions
     sv_keywords = {'assert', 'property', 'posedge', 'negedge', 'iff', 'disable', 'throughout'}
-    sv_functions = {'past', 'rose', 'fell', 'stable', 'countones'}
+    sv_functions = {'past', 'rose', 'fell', 'stable', 'countones'} # System functions that don't start with '$'
+    sv_system_tasks_functions_with_dollar = {'onehot', 'onehot0', 'changed', 'stable', 'past', 'fell', 'rose', 'isunknown'} # Common system functions that start with '$'
+    # Common references that are not signals but should not be flagged as undefined
+    common_ignored_identifiers = {'clk', 'rst_n', 'DUT', 'fifo', 'FIFO', 'i', 'b1', 'WIDTH', 'NUM_REQS', 'CLIENTS'} # Added i, b1, WIDTH, NUM_REQS, CLIENTS
 
-    # Find all identifiers in the assertion
-    # Pattern: word characters, possibly preceded by DUT. or module_name.
-    # Also catch wrong module references like fifo.signal
-    identifiers = re.findall(r'(?:(?:DUT|fifo|FIFO)\.)?(\w+)', assertion_no_label)
+    # Find all identifiers in the assertion, including those starting with '$'
+    identifiers = re.findall(r'\b[\w$]+\b', assertion_no_label)
 
     undefined_signals = []
     for identifier in identifiers:
@@ -428,17 +431,35 @@ def validate_signals_exist(assertion: str, ports: List[dict], internals: List[di
             continue
         if identifier in sv_functions:
             continue
+
+        # Handle SystemVerilog system functions (e.g., $onehot0, $changed)
         if identifier.startswith('$'):
+            # Check if the part after '$' is a known system function
+            if identifier[1:] in sv_system_tasks_functions_with_dollar:
+                continue
+            # If it starts with $ but is not in our known list, we'll assume it's a valid system task/function
+            # to avoid false positives in signal validation.
             continue
-        if identifier.isupper():  # Likely a parameter (FIFO_DEPTH, etc.)
+        elif identifier in sv_system_tasks_functions_with_dollar:
+            # Handle cases where the '$' might have been stripped during LLM generation or parsing
+            continue
+
+        if identifier.isupper() and identifier in common_ignored_identifiers:  # Likely a parameter or genvar that we explicitly ignore
             continue
         if identifier.isdigit():  # Numeric literal
             continue
-        if identifier in ['clk', 'rst_n', 'DUT', 'fifo', 'FIFO']:  # Common references
+        if identifier in common_ignored_identifiers:  # Common references that are not signals or already handled (like 'i', 'WIDTH', etc.)
             continue
         # Skip assertion labels (start with as__, am__, co__)
         if identifier.startswith(('as__', 'am__', 'co__')):
             continue
+        if identifier.startswith('`'): # Compiler directives often start with backtick
+            continue
+
+        # Check if it's a valid signal
+        if identifier not in all_valid_signals:
+            if identifier not in undefined_signals:
+                undefined_signals.append(identifier)
 
         # Check if it's a valid signal
         if identifier not in all_valid_signals:
@@ -511,10 +532,7 @@ def load_human_descriptions(prompts_file: str = "output/assertion_prompts.txt") 
 
 def parse_assertions_from_file(file_content: str) -> List[str]:
     """
-    Parse assertions from a file, properly handling multi-line assertions.
-
-    An assertion starts with 'assert property' or 'label: assert property'
-    and ends with a semicolon. Labels can be on a separate line.
+    Parse assertions from a file, handling multi-line assertions and generate blocks.
 
     Args:
         file_content: Content of the assertions file
@@ -523,73 +541,47 @@ def parse_assertions_from_file(file_content: str) -> List[str]:
         List of complete assertions (each as a single string)
     """
     assertions = []
-    lines = file_content.split('\n')
-    current_assertion = []
-    in_assertion = False
-    pending_label = None
+    # Regex to find 'assert property' statements, including those within generate blocks
+    # This regex is designed to be more robust for various SVA formats.
+    # It tries to capture the entire assertion from 'assert property' to the closing semicolon,
+    # handling nested parentheses.
+    assertion_pattern = re.compile(
+        r'(generate\s+.*?endgenerate)|' # Capture entire generate blocks first
+        r'(\w+\s*:\s*assert\s+property\s*\(.*?\)\s*;)|' # Labelled assertions
+        r'(assert\s+property\s*\(.*?\)\s*;)', # Unlabelled assertions
+        re.DOTALL | re.IGNORECASE
+    )
 
-    for line in lines:
-        stripped = line.strip()
+    matches = assertion_pattern.finditer(file_content)
 
-        # Skip empty lines when not in an assertion
-        if not stripped and not in_assertion:
-            continue
+    for match in matches:
+        generate_block = match.group(1)
+        labelled_assertion = match.group(2)
+        unlabelled_assertion = match.group(3)
 
-        # Check if this is a standalone label (label: on its own line)
-        label_only_match = re.match(r'^(\w+)\s*:\s*$', stripped)
-        if label_only_match and not in_assertion:
-            # Save this label for the next assertion
-            pending_label = stripped
-            continue
-
-        # Check if this line starts an assertion
-        # Patterns: "assert property" or "label: assert property"
-        if re.search(r'(^\w+\s*:\s*assert\s+property)|(^assert\s+property)', stripped, re.IGNORECASE):
-            # If we were already building an assertion, save it
-            if in_assertion and current_assertion:
-                assertions.append(' '.join(current_assertion))
-                current_assertion = []
-
-            in_assertion = True
-
-            # If we have a pending label, prepend it
-            if pending_label:
-                current_assertion = [pending_label, stripped]
-                pending_label = None
-            else:
-                current_assertion = [stripped]
-
-            # Check if it ends on the same line
-            if ';' in stripped:
-                assertions.append(' '.join(current_assertion))
-                current_assertion = []
-                in_assertion = False
-
-        elif in_assertion:
-            # Continue building the current assertion
-            current_assertion.append(stripped)
-
-            # Check if this line ends the assertion
-            if ';' in stripped:
-                assertions.append(' '.join(current_assertion))
-                current_assertion = []
-                in_assertion = False
-
-    # Handle case where file ended while still in assertion
-    if current_assertion:
-        assertions.append(' '.join(current_assertion))
-
-    # Clean up: normalize whitespace and filter out incomplete assertions
-    cleaned_assertions = []
-    for assertion in assertions:
-        # Normalize multiple spaces to single space
-        cleaned = re.sub(r'\s+', ' ', assertion).strip()
-
-        # Only add if it contains 'assert property' and ends with semicolon
-        if cleaned and 'assert property' in cleaned.lower() and cleaned.endswith(';'):
-            cleaned_assertions.append(cleaned)
-
-    return cleaned_assertions
+        if generate_block:
+            # If it's a generate block, extract assertions from within it
+            # We need a recursive call or a nested regex for assertions inside generate
+            # For simplicity, let's extract 'assert property' statements inside generate
+            inner_assertion_pattern = re.compile(
+                r'(\w+\s*:\s*assert\s+property\s*\(.*?\)\s*;)|'
+                r'(assert\s+property\s*\(.*?\)\s*;)',
+                re.DOTALL | re.IGNORECASE
+            )
+            inner_matches = inner_assertion_pattern.finditer(generate_block)
+            for inner_match in inner_matches:
+                inner_labelled = inner_match.group(1)
+                inner_unlabelled = inner_match.group(2)
+                if inner_labelled:
+                    assertions.append(clean_assertion(inner_labelled))
+                elif inner_unlabelled:
+                    assertions.append(clean_assertion(inner_unlabelled))
+        elif labelled_assertion:
+            assertions.append(clean_assertion(labelled_assertion))
+        elif unlabelled_assertion:
+            assertions.append(clean_assertion(unlabelled_assertion))
+            
+    return assertions
 
 def generate_formal_verification_code(assertions: List[str], rtl_code: str) -> str:
     """
@@ -612,7 +604,8 @@ def generate_formal_verification_code(assertions: List[str], rtl_code: str) -> s
         api_base="http://localhost:1234/v1",
         api_key="lm-studio",
         max_tokens=2048,
-        temperature=0.3
+        temperature=0.3,
+        response_format={"type": "text"} # Explicitly set response format
     )
 
     dspy.configure(lm=lm)

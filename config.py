@@ -17,7 +17,7 @@ class Config:
         # Design files
         self.rtl_top_module = "FIFO"  # Name of the top-level module
         self.rtl_design_file = self.project_root / "design" / "FIFO.sv"  # Path to RTL file
-        self.spec_file = self.project_root / "design" / "specification.md"  # Specification file
+        self.spec_file = self.project_root / "design" / "specification_fifo.md"  # Specification file
 
         # Output directories
         self.output_dir = self.project_root / "output"

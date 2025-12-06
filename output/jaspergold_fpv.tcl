@@ -1,32 +1,32 @@
-# ------------------------------------------------------------------
-# JasperGold TCL Script for Formal Verification of FIFO_tb
-# ------------------------------------------------------------------
-
-# 1. Analyze RTL and Testbench (relative paths)
+# Clear previous analysis state
 analyze -clear
-analyze -sv12 ../design/FIFO.sv
-analyze -sv12 ../output/formal_verification.sv
 
-# 2. Elaborate the design with related covers
-elaborate -top FIFO_tb -create_related_covers {witness precondition}
+# Analyze RTL design file (SystemVerilog 2012)
+analyze -sv12 design/ARBITER.sv
 
-# 3. Set up clock and reset signals
+# Analyze testbench file (relative path)
+analyze -sv12 output/formal_verification.sv
+
+# Elaborate the design with the specified top module and requested covers
+elaborate -top rr_arbiter_tb -create_related_covers {witness precondition}
+
+# Set up clock and reset signals
 clock clk
 reset -expression (!rst_n)
 
-# 4. Get design information to check complexity
+# Get design information to check general complexity
 get_design_info
 
-# 5. Proof settings
+# Proof settings
 set_word_level_reduction on
 set_prove_time_limit 72h
 
-# Optional: configure ProofGrid (if available)
-set_proofgrid_max_jobs 180
-set_proofgrid_manager on
+# (Optional) Configure ProofGrid if available
+#set_proofgrid_max_jobs 180
+#set_proofgrid_manager on
 
-# 6. Run formal verification
+# Run formal verification
 prove -all
 
-# 7. Report results
+# Report proof results
 report
