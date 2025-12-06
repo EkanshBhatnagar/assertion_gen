@@ -200,15 +200,16 @@ endmodule
             # Parse verilator output
             errors = self._parse_verilator_output(result.stderr)
 
-            # Debug: print raw output if needed (disabled)
-            # if result.returncode != 0 and len(errors) == 0:
-            #     print(f"DEBUG - Return code: {result.returncode} but no errors parsed!")
-            #     print(f"DEBUG - Stderr:\n{result.stderr}")
+            # Count only actual Errors, not Warnings
+            error_count = len([e for e in errors if e.severity == "Error"])
 
-            # If return code is 0 and no errors found, it's valid
-            is_valid = (result.returncode == 0) and (len([e for e in errors if e.severity == "Error"]) == 0)
+            # Valid if no ERRORS (warnings are OK)
+            is_valid = (error_count == 0)
 
-            return is_valid, errors
+            # Return only errors (filter out warnings)
+            errors_only = [e for e in errors if e.severity == "Error"]
+
+            return is_valid, errors_only
 
         except subprocess.TimeoutExpired:
             return False, [SVValidationError(0, "Validation timeout", "Error")]

@@ -4,37 +4,29 @@ import os
 from typing import List, Tuple
 from example_loader import load_examples_from_directory, get_quality_assertions
 
-class AssertionRefinement(dspy.Signature):
+class SimpleAssertionFix(dspy.Signature):
     """
-    Refine a SystemVerilog assertion to match the actual RTL design signals.
-    Given the human language description, the generated assertion, and RTL signal info,
-    output a corrected assertion with proper signal names and syntax.
+    Fix signal names in a SystemVerilog assertion to match actual RTL design.
 
-    Guidelines for refinement:
-    1. Match signal names exactly to those in signal_info
-    2. Use hierarchical signal references (module.signal) when needed
-    3. Preserve temporal operators: |-> (implication), |=> (followed by), ##N (delay)
-    4. Preserve system functions: $past, $stable, $countones, etc.
-    5. Ensure proper SystemVerilog assertion syntax
-    6. Keep assertion label with correct prefix (as__, am__, co__)
-    7. For internal signals, use hierarchical notation like FIFO.wr_ptr
+    You are given an assertion and the ACTUAL signals from the RTL design.
+    Your ONLY job is to fix signal names - nothing else!
 
-    CRITICAL - DO NOT generate malformed assertions:
-    - NEVER end with just |-> or |=> without a consequent
-    - NEVER use patterns like "|-> ##N;" (implication to delay with nothing after)
-    - NEVER put the label inside assert property() - WRONG: "assert property (label: @(posedge clk)...)"
-    - CORRECT label placement: "label: assert property (@(posedge clk)...)"
-    - ALWAYS ensure complete structure: condition |-> consequent; or condition |=> consequent;
-    - Examples of CORRECT assertions:
-      * as__test: assert property (@(posedge clk) wr_en && !full |=> wr_ack);
-      * as__full: assert property (@(posedge clk) count == DEPTH |-> full);
-      * req |-> ##3 ack  (NOT "req |-> ##3;")
-    - If you cannot generate a valid assertion, keep the original unchanged
+    Rules:
+    1. Replace wrong signal names with correct ones from the signal list
+    2. Do NOT change temporal operators (|=>, |->, ##N)
+    3. Do NOT add or remove delays
+    4. Do NOT change the assertion logic
+    5. Do NOT move or change labels
+    6. If signal doesn't exist in design, REMOVE that part or use closest match
+
+    Examples:
+    - "almost_full" → "almostfull" (if almostfull exists)
+    - "fifo.empty" → "empty" (remove module prefix for ports)
+    - Keep everything else exactly the same!
     """
-    human_description = dspy.InputField(desc="The original human language description of what the assertion should check")
-    generated_assertion = dspy.InputField(desc="The SystemVerilog assertion that needs refinement")
-    signal_info = dspy.InputField(desc="Information about module signals, ports, and internal signals")
-    refined_assertion = dspy.OutputField(desc="The refined SystemVerilog assertion with correct signal names and COMPLETE, VALID syntax. Label must be OUTSIDE assert property().")
+    original_assertion = dspy.InputField(desc="The assertion with possibly wrong signal names")
+    available_signals = dspy.InputField(desc="List of ACTUAL signal names in the RTL design")
+    fixed_assertion = dspy.OutputField(desc="Assertion with ONLY signal names fixed, everything else unchanged")
 
 
 class AssertionSyntaxFix(dspy.Signature):
@@ -398,6 +390,64 @@ endmodule
     return testbench
 
 
+def validate_signals_exist(assertion: str, ports: List[dict], internals: List[dict]) -> Tuple[bool, List[str]]:
+    """
+    Check if all signals referenced in an assertion actually exist in the design.
+
+    Args:
+        assertion: The assertion string
+        ports: List of port dictionaries
+        internals: List of internal signal dictionaries
+
+    Returns:
+        Tuple of (all_signals_exist, list_of_undefined_signals)
+    """
+    # Get all valid signal names
+    port_names = {p['name'] for p in ports}
+    internal_names = {s['name'] for s in internals}
+    all_valid_signals = port_names | internal_names
+
+    # Remove the label if present (label: assert property...)
+    assertion_no_label = re.sub(r'^\w+\s*:\s*', '', assertion)
+
+    # Extract potential signal references from assertion
+    # Look for identifiers (word characters) that could be signals
+    # Skip SystemVerilog keywords and system functions
+    sv_keywords = {'assert', 'property', 'posedge', 'negedge', 'iff', 'disable', 'throughout'}
+    sv_functions = {'past', 'rose', 'fell', 'stable', 'countones'}
+
+    # Find all identifiers in the assertion
+    # Pattern: word characters, possibly preceded by DUT. or module_name.
+    # Also catch wrong module references like fifo.signal
+    identifiers = re.findall(r'(?:(?:DUT|fifo|FIFO)\.)?(\w+)', assertion_no_label)
+
+    undefined_signals = []
+    for identifier in identifiers:
+        # Skip if it's a keyword, function, or looks like a parameter
+        if identifier in sv_keywords:
+            continue
+        if identifier in sv_functions:
+            continue
+        if identifier.startswith('$'):
+            continue
+        if identifier.isupper():  # Likely a parameter (FIFO_DEPTH, etc.)
+            continue
+        if identifier.isdigit():  # Numeric literal
+            continue
+        if identifier in ['clk', 'rst_n', 'DUT', 'fifo', 'FIFO']:  # Common references
+            continue
+        # Skip assertion labels (start with as__, am__, co__)
+        if identifier.startswith(('as__', 'am__', 'co__')):
+            continue
+
+        # Check if it's a valid signal
+        if identifier not in all_valid_signals:
+            if identifier not in undefined_signals:
+                undefined_signals.append(identifier)
+
+    return (len(undefined_signals) == 0, undefined_signals)
+
+
 def update_assertion_signal_references(assertion: str, module_name: str,
                                        ports: List[dict], internals: List[dict]) -> str:
     """
@@ -432,6 +482,10 @@ def update_assertion_signal_references(assertion: str, module_name: str,
 
     # Also handle old-style module.signal references and convert to DUT.signal
     updated = re.sub(rf'\b{re.escape(module_name)}\.', 'DUT.', updated)
+
+    # Handle lowercase module name references (common mistake)
+    if module_name:
+        updated = re.sub(rf'\b{re.escape(module_name.lower())}\.', 'DUT.', updated)
 
     return updated
 
@@ -601,8 +655,12 @@ def generate_formal_verification_code(assertions: List[str], rtl_code: str) -> s
                 signal_info=signal_info
             )
 
-    # Instantiate refiner
-    refiner = AssertionRefiner()
+    # Create simple signal list for LLM
+    all_signal_names = [p['name'] for p in ports] + [s['name'] for s in internals]
+    signals_list = "Available signals: " + ", ".join(all_signal_names)
+
+    # Define simple signal fixer
+    signal_fixer = dspy.ChainOfThought(SimpleAssertionFix)
 
     # Initialize validator for syntax checking
     try:
@@ -618,7 +676,7 @@ def generate_formal_verification_code(assertions: List[str], rtl_code: str) -> s
     # Refine each assertion
     refined_assertions = []
     print("\n" + "="*80)
-    print("REFINING ASSERTIONS WITH SYNTAX VALIDATION")
+    print("FIXING SIGNAL NAMES AND VALIDATING")
     print("="*80)
 
     # Create output directory and prepare incremental output file
@@ -652,99 +710,51 @@ def generate_formal_verification_code(assertions: List[str], rtl_code: str) -> s
         print(f"  Human description: {human_desc[:80]}...")
 
         try:
-            # Use DSPy to refine the assertion with examples
-            result = refiner(
-                human_description=human_desc,
-                generated_assertion=assertion_clean,
-                signal_info=signal_info_with_examples
+            # Simple approach: Just fix signal names using RTL context
+            result = signal_fixer(
+                original_assertion=assertion_clean,
+                available_signals=signals_list
             )
 
-            refined = result.refined_assertion.strip()
-
-            # Additional cleanup
+            refined = result.fixed_assertion.strip()
             refined = clean_assertion(refined)
             refined = extract_assertion_from_thinking(refined)
 
-            # Validate it's not empty after extraction
             if not refined or len(refined) < 10:
-                print(f"  Warning: Extracted assertion too short")
-                if original_is_valid:
-                    print(f"    → Using original (valid)")
-                    refined = assertion_clean
-                else:
-                    print(f"    → Original also invalid, skipping this assertion")
-                    continue
+                print(f"  ⚠ Signal fix produced empty result, using original")
+                refined = assertion_clean
             else:
-                print(f"  Refined: {refined[:100]}...")
+                print(f"  Signal names fixed: {refined[:80]}...")
 
             # Validate the assertion is well-formed (pattern-based)
             if not validate_assertion(refined):
-                print(f"  ✗ Warning: Assertion failed pattern validation (malformed)")
+                print(f"  ✗ Pattern validation failed")
                 if original_is_valid:
-                    print(f"    → Reverting to original (valid)")
                     refined = assertion_clean
                 else:
-                    print(f"    → Original also invalid, skipping this assertion")
+                    print(f"  ⚠ Skipping (invalid pattern)")
                     continue
-
-            # Syntax validation with Verilator (if available)
-            if use_validator:
-                is_valid, errors = validator.validate_assertion(refined)
-                if not is_valid:
-                    print(f"  ✗ Syntax errors detected ({len(errors)} errors)")
-                    for err in errors[:3]:  # Show first 3 errors
-                        print(f"      - {err}")
-
-                    # Try to fix syntax errors with feedback loop (max 2 attempts)
-                    fix_attempt = 0
-                    max_fix_attempts = 2
-                    while not is_valid and fix_attempt < max_fix_attempts:
-                        fix_attempt += 1
-                        print(f"  🔧 Attempting syntax fix (attempt {fix_attempt}/{max_fix_attempts})...")
-
-                        # Create error message for LLM
-                        error_msg = "\n".join([f"- {err}" for err in errors[:5]])
-
-                        try:
-                            # Use DSPy to fix syntax
-                            syntax_fixer = dspy.ChainOfThought(AssertionSyntaxFix)
-                            fix_result = syntax_fixer(
-                                original_assertion=refined,
-                                syntax_errors=error_msg,
-                                signal_info=signal_info
-                            )
-
-                            fixed = fix_result.fixed_assertion.strip()
-                            fixed = clean_assertion(fixed)
-                            fixed = extract_assertion_from_thinking(fixed)
-
-                            # Validate the fix
-                            is_valid, errors = validator.validate_assertion(fixed)
-                            if is_valid:
-                                print(f"  ✓ Syntax fixed successfully!")
-                                refined = fixed
-                                break
-                            else:
-                                print(f"  ⚠ Fix attempt {fix_attempt} still has errors")
-                        except Exception as e:
-                            print(f"  ⚠ Fix attempt {fix_attempt} failed: {e}")
-                            break
-
-                    # If still invalid after attempts, check if original is valid
-                    if not is_valid:
-                        print(f"  ✗ Could not fix syntax errors")
-                        if original_is_valid:
-                            print(f"    → Reverting to original (valid)")
-                            refined = assertion_clean
-                        else:
-                            print(f"    → Original also invalid, skipping this assertion")
-                            continue
-                else:
-                    print(f"  ✓ Syntax validation passed")
 
             # Update signal references (DUT.signal for internal signals)
             refined = update_assertion_signal_references(refined, module_name, ports, internals)
             print(f"  Updated signal references")
+
+            # Validate that all signals exist in the design
+            signals_exist, undefined = validate_signals_exist(refined, ports, internals)
+            if not signals_exist:
+                print(f"  ✗ Warning: Assertion references undefined signals: {', '.join(undefined)}")
+                if original_is_valid:
+                    # Check if original also has undefined signals
+                    original_signals_exist, _ = validate_signals_exist(assertion_clean, ports, internals)
+                    if original_signals_exist:
+                        print(f"    → Reverting to original (has valid signals)")
+                        refined = assertion_clean
+                    else:
+                        print(f"    → Original also has undefined signals, skipping this assertion")
+                        continue
+                else:
+                    print(f"    → Original also invalid, skipping this assertion")
+                    continue
 
             # Final validation after signal updates
             if not validate_assertion(refined):
