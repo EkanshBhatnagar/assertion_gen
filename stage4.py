@@ -18,7 +18,8 @@ class JasperGoldTCLGeneration(dspy.Signature):
 
     The TCL script should include:
     1. analyze -clear and analyze -sv12 commands to load RTL and testbench (use RELATIVE paths)
-    2. elaborate command with -top flag and -create_related_covers (NO -auto_hr_info flag)
+    2. elaborate command with -top flag and -create_related_covers (NO -auto_hr_info flag).
+       If parameters are provided, use the `-param` switch (e.g., elaborate -top my_tb -param "WIDTH=8,DEPTH=32").
     3. clock command to specify the clock signal
     4. reset command with expression for reset signal
     5. get_design_info to check complexity
@@ -36,6 +37,7 @@ class JasperGoldTCLGeneration(dspy.Signature):
     top_module = dspy.InputField(desc="Name of the top-level testbench module")
     rtl_file = dspy.InputField(desc="Relative path to the RTL design file (e.g., design/FIFO.sv)")
     testbench_file = dspy.InputField(desc="Relative path to the testbench file (e.g., output/formal_verification.sv)")
+    parameters = dspy.InputField(desc="Comma-separated parameter assignments for the top-level module (e.g., 'WIDTH=8,DEPTH=32'). Can be empty.")
     clock_signal = dspy.InputField(desc="Name of the clock signal")
     reset_signal = dspy.InputField(desc="Name and expression for reset signal")
     reference_examples = dspy.InputField(desc="Reference TCL examples for guidance")
@@ -43,7 +45,7 @@ class JasperGoldTCLGeneration(dspy.Signature):
 
 
 def generate_jaspergold_tcl(top_module: str, rtl_file: Path, testbench_file: Path,
-                            clock_signal: str, reset_expression: str) -> str:
+                            clock_signal: str, reset_expression: str, parameters: str = "") -> str:
     """
     Generate a JasperGold TCL script for formal verification.
 
@@ -53,6 +55,7 @@ def generate_jaspergold_tcl(top_module: str, rtl_file: Path, testbench_file: Pat
         testbench_file: Path to the testbench file
         clock_signal: Name of the clock signal
         reset_expression: Reset expression (e.g., "(!rst_n)" for active-low reset)
+        parameters: Comma-separated parameter values for the top-level module.
 
     Returns:
         Complete TCL script as a string
@@ -65,7 +68,7 @@ def generate_jaspergold_tcl(top_module: str, rtl_file: Path, testbench_file: Pat
     if not tcl_examples:
         print("Warning: No TCL examples found, generating from template")
         return generate_tcl_template(top_module, rtl_file, testbench_file,
-                                    clock_signal, reset_expression)
+                                    clock_signal, reset_expression, parameters)
 
     # Create reference prompt with examples
     reference_prompt = create_tcl_few_shot_prompt(tcl_examples)
@@ -88,13 +91,14 @@ def generate_jaspergold_tcl(top_module: str, rtl_file: Path, testbench_file: Pat
             self.generator = dspy.ChainOfThought(JasperGoldTCLGeneration)
 
         def forward(self, top_module, rtl_file, testbench_file,
-                   clock_signal, reset_signal, reference_examples):
+                   clock_signal, reset_signal, parameters, reference_examples):
             return self.generator(
                 top_module=top_module,
                 rtl_file=str(rtl_file),
                 testbench_file=str(testbench_file),
                 clock_signal=clock_signal,
                 reset_signal=reset_signal,
+                parameters=parameters,
                 reference_examples=reference_examples
             )
 
@@ -107,6 +111,8 @@ def generate_jaspergold_tcl(top_module: str, rtl_file: Path, testbench_file: Pat
     print(f"  Testbench: {testbench_file}")
     print(f"  Clock: {clock_signal}")
     print(f"  Reset: {reset_expression}")
+    if parameters:
+        print(f"  Parameters: {parameters}")
     print()
 
     try:
@@ -117,6 +123,7 @@ def generate_jaspergold_tcl(top_module: str, rtl_file: Path, testbench_file: Pat
             testbench_file=testbench_file,
             clock_signal=clock_signal,
             reset_signal=reset_expression,
+            parameters=parameters,
             reference_examples=reference_prompt
         )
 
@@ -134,11 +141,11 @@ def generate_jaspergold_tcl(top_module: str, rtl_file: Path, testbench_file: Pat
         print(f"✗ Error generating TCL script: {e}")
         print("  Falling back to template generation")
         return generate_tcl_template(top_module, rtl_file, testbench_file,
-                                    clock_signal, reset_expression)
+                                    clock_signal, reset_expression, parameters)
 
 
 def generate_tcl_template(top_module: str, rtl_file: Path, testbench_file: Path,
-                         clock_signal: str, reset_expression: str) -> str:
+                         clock_signal: str, reset_expression: str, parameters: str = "") -> str:
     """
     Generate a basic TCL script template without LLM generation.
 
@@ -148,6 +155,7 @@ def generate_tcl_template(top_module: str, rtl_file: Path, testbench_file: Path,
         testbench_file: Path to the testbench file
         clock_signal: Name of the clock signal
         reset_expression: Reset expression
+        parameters: Comma-separated parameter values.
 
     Returns:
         TCL script string
@@ -160,6 +168,8 @@ def generate_tcl_template(top_module: str, rtl_file: Path, testbench_file: Path,
         # If can't make relative, just use the path as-is
         rtl_rel = rtl_file
         tb_rel = testbench_file
+
+    param_string = f'-param "{parameters}"' if parameters else ""
 
     tcl_script = f"""# JasperGold TCL Script for Formal Verification
 # Auto-generated by assertion generation pipeline
@@ -181,7 +191,7 @@ analyze -sv12 {rtl_rel}
 analyze -sv12 {tb_rel}
 
 # Elaborate the design
-elaborate -top {top_module} -create_related_covers {{witness precondition}}
+elaborate -top {top_module} {param_string} -create_related_covers {{witness precondition}}
 
 # Set up clock
 clock {clock_signal}

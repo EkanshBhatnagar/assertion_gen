@@ -1,28 +1,32 @@
 // Refined Assertions Progress
-// Total assertions to process: 11
+// Total assertions to process: 6
 // ============================================================================
 
 // Assertion 1
-// Human description: 1. After reset is deasserted (goes high), empty should be high on the next clock cycle.
-as__empty_after_reset: assert property ($rose(rst_n) |=> DUT.empty);
+// Human description: 2. For each bit i, if gnt[i] is high, then req[i] must also be high in the same cycle.
+generate
+    for (genvar i = 0; i < WIDTH; i++) begin
+    as__gnt_implies_req: assert property (@(posedge clk) disable iff (!rst_n) gnt[i] |-> req[i] );
+end
+endgenerate
 
 // Assertion 2
-// Human description: 3. When a write is attempted (wr_en high) while the FIFO is full, the write data should not be stored in the FIFO on the next cycle.
-assert property (@(posedge clk) (wr_en && full) |=> full);
+// Human description: 3. If any bit of req is high, then some bit of gnt must also be high in the same cycle.
+as__clk_rst_n_req_gnt_same_cycle: assert property (|clk |-> |rst_n |-> |req |=> |gnt);
 
 // Assertion 3
-// Human description: 4. When full is high and wr_en is high, overflow should be asserted high in the same cycle.
-as__fifo_overflow: assert property (@(posedge clk) disable iff (!rst_n) (full && wr_en) |-> overflow);
+// Human description: 4. After gnt[i] is asserted, if req[i] remains high in the next cycle, gnt[i] can only be reasserted after all other asserted bits of req have been serviced.
+generate
+    for (genvar i = 0; i < NUM_REQS; i++) begin
+    as__round_robin_fairness: assert property ($past(clk, rst_n) && req[i] |=> clk, rst_n, gnt[i] && ($countones(gnt) < $countones(req)));
+end
+endgenerate
 
 // Assertion 4
-// Human description: 5. When a read is attempted (rd_en high) while the FIFO is empty, underflow should be asserted high in the same cycle.
-as__fifo_underflow: assert property (@(posedge clk) disable iff (!rst_n) (rd_en && empty) |-> underflow);
+// Human description: 5. When rst_n is asserted low, gnt must be all 0s in the same cycle.
+assert property (@(posedge clk) disable iff (~rst_n) !rst_n |-> (req & ~rst_n));
 
 // Assertion 5
-// Human description: 7. When a successful write occurs (wr_en high and not full), wr_ack should be high on the next cycle.
-as__wr_ack_after_successful_write: assert property (@(posedge clk) (wr_en && !full) |=> wr_ack);
-
-// Assertion 6
-// Human description: 11. When a read and write are attempted simultaneously on an empty FIFO, the write should succeed (data stored and wr_ack high) on the next cycle.
-as__simultaneous_rdwr_empty_write_succeeds: assert property (@(posedge clk) disable iff (!rst_n) (rd_en && wr_en && empty) |=> (DUT.wr_ack && !empty));
+// Human description: 6. The gnt output must be valid in the same cycle as the req input changes, without any cycle delay.
+as__gnt_valid_same_cycle_as_req_change: assert property (@(posedge clk) disable iff (!rst_n) $changed(req) |-> gnt);
 

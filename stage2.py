@@ -32,9 +32,14 @@ class EnglishAssertionToSystemVerilog(dspy.Signature):
     6. Name assertions with prefixes: as__ (assert), am__ (assume), co__ (cover)
     7. For parameterized assertions, use generate blocks
     8. Reference signals with hierarchical paths when needed (module.signal)
+    9. If you use a `generate` block with parameters (e.g., `WIDTH`, `DEPTH`, `NUM_REQS`), you MUST declare them in the `required_parameters` output field.
+       List each parameter on a new line, e.g., "parameter WIDTH = 8;\nparameter DEPTH = 32;".
+       Provide a sensible default value.
     """
     english_assertion = dspy.InputField(desc="A plain English assertion describing what to check. ANALYZE timing keywords: 'next' = |=>, 'immediately/when' = |->, 'N cycles' = ##N")
     systemverilog_assertion = dspy.OutputField(desc="A syntactically correct SystemVerilog assertion with CORRECT temporal operator.")
+    required_parameters = dspy.OutputField(desc="Parameter declarations (e.g., 'parameter WIDTH = 8;') needed for the assertion, if any. One per line. If none, leave empty.")
+
 
 def generate_sv_assertions(prompts: list[str]) -> list[str]:
     """
@@ -104,8 +109,17 @@ def generate_sv_assertions(prompts: list[str]) -> list[str]:
             print(f"[{i}/{len(prompts)}] Generating assertion...")
             try:
                 result = assertion_generator(english_assertion=prompt)
-                sv_assertions.append(result.systemverilog_assertion)
-                print(f"  ✓ Generated: {result.systemverilog_assertion[:80]}...")
+                assertion = result.systemverilog_assertion
+                params = result.get('required_parameters', '') # Use .get for safety
+
+                if params and params.strip():
+                    # Prepend parameters as comments
+                    param_lines = [f"// parameter: {line.strip()}" for line in params.strip().split('\n') if line.strip()]
+                    full_assertion = "\n".join(param_lines) + "\n" + assertion
+                    sv_assertions.append(full_assertion)
+                else:
+                    sv_assertions.append(assertion)
+                print(f"  ✓ Generated: {sv_assertions[-1][:80]}...")
             except Exception as e:
                 print(f"  ✗ Error: {e}")
                 # Fallback: create a simple assertion

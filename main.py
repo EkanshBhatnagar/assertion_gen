@@ -18,6 +18,7 @@ Usage:
 import argparse
 import sys
 import os
+import json
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -151,14 +152,21 @@ def run_stage3() -> bool:
             return False
 
         # Generate formal verification code (testbench)
-        formal_code = generate_formal_verification_code(assertions, rtl_code)
+        formal_code, params = generate_formal_verification_code(assertions, rtl_code)
 
         # Save testbench
         with open(config.testbench_file, "w") as f:
             f.write(formal_code)
 
+        # Save parameters for stage 4
+        param_file = config.output_dir / "parameters.json"
+        with open(param_file, "w") as f:
+            json.dump(params, f, indent=4)
+
+
         print(f"\n✓ Stage 3 completed successfully")
         print(f"  Generated testbench: {config.testbench_file}")
+        print(f"  Saved parameters to: {param_file}")
         print(f"  Progress file: {config.progress_file}\n")
         return True
 
@@ -188,6 +196,15 @@ def run_stage4() -> bool:
             print(f"  Please run Stage 3 first.")
             return False
 
+        # Load parameters from stage 3
+        param_file = config.output_dir / "parameters.json"
+        params_str = ""
+        if param_file.exists():
+            with open(param_file, "r") as f:
+                params = json.load(f)
+            params_str = ",".join([f"{p['name']}={p['value']}" for p in params])
+            print(f"📖 Loaded {len(params)} parameters from {param_file}")
+
         # Generate TCL script
         top_module = f"{config.rtl_top_module}_tb"
         tcl_script = generate_jaspergold_tcl(
@@ -195,7 +212,8 @@ def run_stage4() -> bool:
             rtl_file=config.rtl_design_file,
             testbench_file=config.testbench_file,
             clock_signal=config.clock_signal,
-            reset_expression=config.get_reset_expression()
+            reset_expression=config.get_reset_expression(),
+            parameters=params_str
         )
 
         # Save TCL script

@@ -553,7 +553,7 @@ def parse_assertions_from_file(file_content: str) -> List[str]:
 
     return cleaned_assertions
 
-def generate_formal_verification_code(assertions: List[str], rtl_code: str) -> str:
+def generate_formal_verification_code(assertions: List[str], rtl_code: str) -> Tuple[str, List[dict]]:
     """
     Generates formal verification code using locally hosted LM Studio model (gpt-oss-20b).
     This includes:
@@ -566,7 +566,9 @@ def generate_formal_verification_code(assertions: List[str], rtl_code: str) -> s
         rtl_code: The RTL design code
 
     Returns:
-        Complete formal verification SystemVerilog code
+        A tuple containing:
+        - Complete formal verification SystemVerilog code (str)
+        - A list of all parameters used in the testbench (List[dict])
     """
     # Configure DSPy for LM Studio
     lm = dspy.LM(
@@ -604,6 +606,22 @@ def generate_formal_verification_code(assertions: List[str], rtl_code: str) -> s
     # Load human language descriptions from stage 1
     human_descriptions = load_human_descriptions()
     print(f"\nLoaded {len(human_descriptions)} human language descriptions from stage 1")
+
+    # --- Parameter Extraction Step ---
+    found_param_decls = []
+    assertions_no_params = []
+    for assertion in assertions:
+        lines = assertion.split('\n')
+        assertion_only_lines = []
+        for line in lines:
+            stripped_line = line.strip()
+            if stripped_line.startswith("// parameter:"):
+                param_decl = stripped_line.replace("// parameter:", "").strip()
+                if param_decl not in found_param_decls:
+                    found_param_decls.append(param_decl)
+            else:
+                assertion_only_lines.append(line)
+        assertions_no_params.append("\n".join(assertion_only_lines))
 
     # Define DSPy module for assertion refinement
     class AssertionRefiner(dspy.Module):
@@ -650,17 +668,17 @@ def generate_formal_verification_code(assertions: List[str], rtl_code: str) -> s
     # Clear the progress file at start
     with open(progress_file, "w") as f:
         f.write(f"// Refined Assertions Progress\n")
-        f.write(f"// Total assertions to process: {len([a for a in assertions if clean_assertion(a).strip()])}\n")
+        f.write(f"// Total assertions to process: {len([a for a in assertions_no_params if clean_assertion(a).strip()])}\n")
         f.write(f"// {'='*76}\n\n")
 
-    for i, assertion in enumerate(assertions, 1):
+    for i, assertion in enumerate(assertions_no_params, 1):
         assertion_clean = clean_assertion(assertion)
 
         # Skip empty assertions
         if not assertion_clean.strip():
             continue
 
-        print(f"\n[{i}/{len(assertions)}] Original assertion:")
+        print(f"\n[{i}/{len(assertions_no_params)}] Original assertion:")
         print(f"  {assertion_clean[:100]}...")
 
         # Validate the original assertion from Stage 2
@@ -801,6 +819,20 @@ def generate_formal_verification_code(assertions: List[str], rtl_code: str) -> s
 
     all_assertions = "\n\n".join(assertions_indented)
 
+    # --- Parameter Augmentation Step ---
+    existing_param_names = {p['name'] for p in params}
+    for param_decl in found_param_decls:
+        # Expected format: "parameter NAME = VALUE;"
+        match = re.search(r'parameter\s+(\w+)\s*=\s*([^;]+);', param_decl)
+        if match:
+            param_name = match.group(1)
+            param_value = match.group(2).strip()
+            if param_name not in existing_param_names:
+                params.append({'name': param_name, 'value': param_value, 'type': 'int'}) # Assume int for simplicity
+                existing_param_names.add(param_name)
+                print(f"  Discovered and added new parameter: {param_name}={param_value}")
+
+
     # Generate testbench code
     print("\n" + "="*80)
     print("GENERATING TESTBENCH WITH DUT INSTANTIATION")
@@ -860,7 +892,7 @@ endmodule
 """
 
     print(f"\nℹ️  Incremental progress available in: {progress_file}")
-    return formal_code
+    return formal_code, params
 
 if __name__ == "__main__":
     # Test the module independently

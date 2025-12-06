@@ -1,11 +1,6 @@
-1. After reset is deasserted (goes high), empty should be high on the next clock cycle.
-2. After reset is deasserted (goes high), full and almost full should be low on the next clock cycle.
-3. When a write is attempted (wr_en high) while the FIFO is full, the write data should not be stored in the FIFO on the next cycle.
-4. When full is high and wr_en is high, overflow should be asserted high in the same cycle.
-5. When a read is attempted (rd_en high) while the FIFO is empty, underflow should be asserted high in the same cycle.
-6. When a successful write occurs (wr_en high and not full), the same data should appear on data_out after FIFO_DEPTH-1 successive reads, assuming no other writes occur.
-7. When a successful write occurs (wr_en high and not full), wr_ack should be high on the next cycle.
-8. When there is one empty entry in the FIFO, almost_full should be asserted high in the same cycle.
-9. When there is only one occupied entry in the FIFO, almost_empty should be asserted high in the same cycle.
-10. When a read and write are attempted simultaneously on a full FIFO, the read should succeed (data_out valid and rd_ack high) on the next cycle.
-11. When a read and write are attempted simultaneously on an empty FIFO, the write should succeed (data stored and wr_ack high) on the next cycle.
+1. At most one bit of the gnt vector can be high in the same cycle.
+2. For each bit i, if gnt[i] is high, then req[i] must also be high in the same cycle.
+3. If any bit of req is high, then some bit of gnt must also be high in the same cycle.
+4. After gnt[i] is asserted, if req[i] remains high in the next cycle, gnt[i] can only be reasserted after all other asserted bits of req have been serviced.
+5. When rst_n is asserted low, gnt must be all 0s in the same cycle.
+6. The gnt output must be valid in the same cycle as the req input changes, without any cycle delay.
