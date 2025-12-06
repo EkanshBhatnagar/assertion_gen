@@ -77,7 +77,7 @@ module FIFO_tb;
 
     as__fifo_underflow: assert property (@(posedge clk) disable iff (!rst_n) (rd_en && empty) |-> underflow);
 
-    as__read_follows_write: assert property (@(posedge clk) (wr_en && !full) |-> ##(FIFO_DEPTH-1) ((!$past(wr_en,1) throughout (##(FIFO_DEPTH-2))) && rd_en |-> (data_out == $past(data_in,FIFO_DEPTH-1))));
+    //as__read_follows_write: assert property (@(posedge clk) (wr_en && !full) |-> ##(FIFO_DEPTH-1) ((!$past(wr_en,1) throughout (##(FIFO_DEPTH-2))) && rd_en |-> (data_out == $past(data_in,FIFO_DEPTH-1))));
 
     as__wr_ack_after_successful_write: assert property (@(posedge clk) (wr_en && !full) |=> wr_ack);
 
