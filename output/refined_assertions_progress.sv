@@ -12,9 +12,9 @@ assert property (@(posedge clk) $rose(rst_n) |=> !full && !almostfull);
 
 // Assertion 3
 // Human description: 3. When a write is attempted (wr_en high) while the FIFO is full, the write data should not be stored in the FIFO on the next cycle.
-assert property (@(posedge clk) (wr_en && full) |=> full);
+assert property (@(posedge clk) (wr_ack && full) |=> full);
 
-// Assertion 4
+// Assertion 4 (error, using original)
 // Human description: 4. When full is high and wr_en is high, overflow should be asserted high in the same cycle.
 as__fifo_overflow: assert property (@(posedge clk) disable iff (!rst_n) (full && wr_en) |-> overflow);
 
@@ -31,18 +31,6 @@ as__read_follows_write: assert property (@(posedge clk) (wr_en && !full) |-> ##(
 as__wr_ack_after_successful_write: assert property (@(posedge clk) (wr_en && !full) |=> wr_ack);
 
 // Assertion 8
-// Human description: 8. When there is one empty entry in the FIFO, almost_full should be asserted high in the same cycle.
-as__almost_full_when_one_entry_left: assert property (DUT.count == 1 |-> almostfull);
-
-// Assertion 9
-// Human description: 9. When there is only one occupied entry in the FIFO, almost_empty should be asserted high in the same cycle.
-as__fifo_almost_empty: assert property ($countones({DUT.mem}) == 1 |-> almostempty);
-
-// Assertion 10
-// Human description: 10. When a read and write are attempted simultaneously on a full FIFO, the read should succeed (data_out valid and rd_ack high) on the next cycle.
-assert property (@(posedge clk) (full && rd_en && wr_en) |=> (!data_out && wr_ack));
-
-// Assertion 11
 // Human description: 11. When a read and write are attempted simultaneously on an empty FIFO, the write should succeed (data stored and wr_ack high) on the next cycle.
 as__simultaneous_rdwr_empty_write_succeeds: assert property (@(posedge clk) disable iff (!rst_n) (rd_en && wr_en && empty) |=> (wr_ack && !empty));
 

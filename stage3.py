@@ -608,7 +608,7 @@ def generate_formal_verification_code(assertions: List[str], rtl_code: str) -> s
     """
     # Configure DSPy for LM Studio
     lm = dspy.LM(
-        model="openai/gpt-oss-20b",
+        model="openai/verireason-codellama-7b-rtlcoder-verilog-grpo-reasoning-tb",
         api_base="http://localhost:1234/v1",
         api_key="lm-studio",
         max_tokens=2048,
