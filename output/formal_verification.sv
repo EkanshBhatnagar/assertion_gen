@@ -23,11 +23,6 @@ module rr_arbiter_tb;
 
     // Parameters
     parameter CLIENTS = 4
-)(
-    input  logic                 clk,
-    input  logic                 rst_n,
-    input  logic [CLIENTS-1:0]   req,
-    output logic [CLIENTS-1:0]   gnt
 );
 
     // Port declarations (as logic)
