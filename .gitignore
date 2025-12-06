@@ -64,3 +64,5 @@ main_old.py
 
 # Documentation for Claude Code
 CLAUDE.md
+TIMING_IMPROVEMENTS.md          
+temporal_operators_guide.md

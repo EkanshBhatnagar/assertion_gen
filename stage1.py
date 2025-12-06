@@ -4,11 +4,26 @@ from dotenv import load_dotenv
 
 class SpecificationToPrompts(dspy.Signature):
     """
-    Given a hardware design specification, generate a list of human-language prompts 
+    Given a hardware design specification, generate a list of human-language prompts
     that can be used to generate SystemVerilog assertions.
+
+    CRITICAL TIMING GUIDANCE:
+    You must specify timing relationships based on signal type:
+
+    1. REGISTERED signals (assigned in always blocks with <=): Use "next cycle" or "next clock cycle"
+       Example: "When write_enable is high, acknowledge should be high on the NEXT cycle"
+
+    2. COMBINATIONAL signals (assigned with = or continuous assign): Use "same cycle" or "immediately"
+       Example: "When count equals depth, full should be high in the SAME cycle"
+
+    3. Look for these patterns to identify registered signals:
+       - always @(posedge clk) begin ... signal <= value; end
+       - output reg signal_name;
+
+    4. Always explicitly specify timing in your prompts!
     """
     specification = dspy.InputField(desc="The hardware design specification in Markdown format.")
-    prompts = dspy.OutputField(desc="A list of human-language prompts for generating SystemVerilog assertions.")
+    prompts = dspy.OutputField(desc="A list of human-language prompts for generating SystemVerilog assertions. Each prompt MUST explicitly state timing: 'next cycle/clock' for registered signals or 'same cycle/immediately' for combinational signals.")
 
 def generate_prompts(specification_content: str) -> list[str]:
     """

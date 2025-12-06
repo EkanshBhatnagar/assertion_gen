@@ -297,9 +297,41 @@ class MyModule(dspy.Module):
 - `refined_assertions_progress.sv`: Updated after each assertion in Stage 3 (for debugging)
 - `formal_verification.sv`: Final output with assertion module + bind statement
 
+## Temporal Operator Usage (CRITICAL)
+
+### Understanding |-> vs |=>
+
+The pipeline has been optimized to correctly use temporal operators:
+
+**|-> (Same Cycle)**: Use for combinational logic
+- Condition and consequence happen simultaneously
+- Example: `count == DEPTH |-> full` (full is combinational)
+
+**|=> (Next Cycle)**: Use for registered logic
+- Consequence happens one clock cycle after condition
+- Example: `wr_en && !full |=> wr_ack` (wr_ack is registered)
+
+**Key Identification:**
+- If signal is assigned in `always @(posedge clk)` with `<=` → Use |=>
+- If signal is assigned with `assign` or `always @(*)` → Use |->
+
+### Pipeline Improvements
+
+**Stage 1:** Enhanced to specify timing in prompts
+- Identifies registered vs combinational signals
+- Adds "next cycle" or "same cycle" keywords to prompts
+
+**Stage 2:** Enhanced with temporal operator guidance
+- Detailed rules for choosing |-> vs |=>
+- Prioritizes few-shot examples showing |=> usage (5 examples)
+- Parses timing keywords from Stage 1 prompts
+
+See `temporal_operators_guide.md` for comprehensive examples.
+
 ## Common Issues
 
 - **Stage 2/3 missing input**: Run previous stages first; pipeline is strictly sequential
-- **LM Studio connection error**: Ensure LM Studio server is running on port 1234 for Stage 3
+- **LM Studio connection error**: Ensure LM Studio server is running on port 1234 for Stages 3 & 4
 - **Signal name mismatches**: Stage 3 should fix these, but complex designs may need manual regex tuning in `extract_signal_info()`
 - **Empty assertion extraction**: Check `extract_assertion_from_thinking()` regex patterns if thinking models change output format
+- **Wrong temporal operator**: Ensure Stage 1 specification includes timing information (registered vs combinational)

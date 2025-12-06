@@ -1,10 +1,11 @@
-1. Assert that when the FIFO is not full and wr_en is asserted, the wr_ack signal is also asserted.
-2. Assert that when the FIFO is full, the full signal is asserted, and any further write attempts result in the overflow signal being asserted.
-3. Assert that when the FIFO is not empty and rd_en is asserted, the data_out matches the expected value based on the FIFO's internal state.
-4. Assert that when the FIFO is empty, the empty signal is asserted, and any further read attempts result in the underflow signal being asserted.
-5. Assert that when the FIFO has only one empty slot left, the almostfull signal is asserted.
-6. Assert that when the FIFO has only one occupied slot left, the almostempty signal is asserted.
-7. Assert that after a reset (rst_n asserted), all control signals (full, almostfull, empty, almostempty, overflow, underflow, wr_ack) are properly initialized to their default values.
-8. Assert that when both wr_en and rd_en are asserted simultaneously, the FIFO prioritizes writing if it is empty and reading if it is full.
-9. Assert that it is illegal to have both overflow and underflow asserted at the same time.
-10. Assert that the data_out remains stable when rd_en is not asserted.
+1. After reset is deasserted (goes high), empty should be high on the next clock cycle.
+2. After reset is deasserted (goes high), full and almost full should be low on the next clock cycle.
+3. When a write is attempted (wr_en high) while the FIFO is full, the write data should not be stored in the FIFO on the next cycle.
+4. When full is high and wr_en is high, overflow should be asserted high in the same cycle.
+5. When a read is attempted (rd_en high) while the FIFO is empty, underflow should be asserted high in the same cycle.
+6. When a successful write occurs (wr_en high and not full), the same data should appear on data_out after FIFO_DEPTH-1 successive reads, assuming no other writes occur.
+7. When a successful write occurs (wr_en high and not full), wr_ack should be high on the next cycle.
+8. When there is one empty entry in the FIFO, almost_full should be asserted high in the same cycle.
+9. When there is only one occupied entry in the FIFO, almost_empty should be asserted high in the same cycle.
+10. When a read and write are attempted simultaneously on a full FIFO, the read should succeed (data_out valid and rd_ack high) on the next cycle.
+11. When a read and write are attempted simultaneously on an empty FIFO, the write should succeed (data stored and wr_ack high) on the next cycle.

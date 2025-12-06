@@ -1,52 +1,32 @@
-# --------------------------------------------------------------------
-# JasperGold Formal Verification Script for FIFO_tb
-# --------------------------------------------------------------------
+# ------------------------------------------------------------------
+# JasperGold TCL Script for Formal Verification of FIFO_tb
+# ------------------------------------------------------------------
 
-# Optional: set environment variables (can be omitted if not used)
-set AUTOSVA_ROOT $env(AUTOSVA_ROOT)
-set DUT_ROOT     $env(DUT_ROOT)
-
-# --------------------------------------------------------------------
-# 1. Analyze Design Sources
-# --------------------------------------------------------------------
+# 1. Analyze RTL and Testbench (relative paths)
 analyze -clear
-analyze -sv12 /Users/ekanshb/Documents/Projects/assertion_gen/design/FIFO.sv
-analyze -sv12 /Users/ekanshb/Documents/Projects/assertion_gen/output/formal_verification.sv
+analyze -sv12 design/FIFO.sv
+analyze -sv12 output/formal_verification.sv
 
-# --------------------------------------------------------------------
-# 2. Elaborate Design (top-level is the testbench)
-# --------------------------------------------------------------------
-elaborate -top FIFO_tb \
-          -create_related_covers {witness precondition} \
-          -auto_hr_info
+# 2. Elaborate the design with related covers
+elaborate -top FIFO_tb -create_related_covers {witness precondition}
 
-# --------------------------------------------------------------------
-# 3. Clock and Reset Setup
-# --------------------------------------------------------------------
+# 3. Set up clock and reset signals
 clock clk
 reset -expression (!rst_n)
 
-# --------------------------------------------------------------------
-# 4. Design Information (complexity check)
-# --------------------------------------------------------------------
+# 4. Get design information to check complexity
 get_design_info
 
-# --------------------------------------------------------------------
-# 5. Proof Settings
-# --------------------------------------------------------------------
+# 5. Proof settings
 set_word_level_reduction on
-set_prove_time_limit 72h          ;# Adjust as needed
+set_prove_time_limit 72h
 
-# Optional: enable ProofGrid parallelism if available
+# Optional: configure ProofGrid (if available)
 set_proofgrid_max_jobs 180
 set_proofgrid_manager on
 
-# --------------------------------------------------------------------
-# 6. Run Formal Verification
-# --------------------------------------------------------------------
-autoprove -all -bg
+# 6. Run formal verification
+prove -all
 
-# --------------------------------------------------------------------
-# 7. Report Results
-# --------------------------------------------------------------------
+# 7. Report results
 report

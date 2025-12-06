@@ -17,24 +17,29 @@ class JasperGoldTCLGeneration(dspy.Signature):
     Generate a JasperGold TCL script for formal verification.
 
     The TCL script should include:
-    1. analyze -clear and analyze -sv12 commands to load RTL and testbench
-    2. elaborate command with -top flag specifying the testbench module
+    1. analyze -clear and analyze -sv12 commands to load RTL and testbench (use RELATIVE paths)
+    2. elaborate command with -top flag and -create_related_covers (NO -auto_hr_info flag)
     3. clock command to specify the clock signal
     4. reset command with expression for reset signal
     5. get_design_info to check complexity
     6. Proof settings (set_word_level_reduction, set_prove_time_limit, etc.)
-    7. autoprove -all command to run formal verification
+    7. prove -all command (NOT autoprove -all -bg) to run formal verification
     8. report command to show results
+
+    IMPORTANT CORRECTIONS:
+    - Use RELATIVE file paths (e.g., design/FIFO.sv, not /absolute/path/to/design/FIFO.sv)
+    - Use "prove -all" NOT "autoprove -all -bg"
+    - In elaborate: use "-create_related_covers {witness precondition}" but NO "-auto_hr_info"
 
     Follow the patterns shown in the reference examples.
     """
     top_module = dspy.InputField(desc="Name of the top-level testbench module")
-    rtl_file = dspy.InputField(desc="Path to the RTL design file")
-    testbench_file = dspy.InputField(desc="Path to the testbench file with assertions")
+    rtl_file = dspy.InputField(desc="Relative path to the RTL design file (e.g., design/FIFO.sv)")
+    testbench_file = dspy.InputField(desc="Relative path to the testbench file (e.g., output/formal_verification.sv)")
     clock_signal = dspy.InputField(desc="Name of the clock signal")
     reset_signal = dspy.InputField(desc="Name and expression for reset signal")
     reference_examples = dspy.InputField(desc="Reference TCL examples for guidance")
-    tcl_script = dspy.OutputField(desc="Complete JasperGold TCL script")
+    tcl_script = dspy.OutputField(desc="Complete JasperGold TCL script with RELATIVE paths and 'prove -all' command")
 
 
 def generate_jaspergold_tcl(top_module: str, rtl_file: Path, testbench_file: Path,
@@ -152,6 +157,7 @@ def generate_tcl_template(top_module: str, rtl_file: Path, testbench_file: Path,
         rtl_rel = rtl_file.relative_to(Path.cwd())
         tb_rel = testbench_file.relative_to(Path.cwd())
     except ValueError:
+        # If can't make relative, just use the path as-is
         rtl_rel = rtl_file
         tb_rel = testbench_file
 
@@ -175,7 +181,7 @@ analyze -sv12 {rtl_rel}
 analyze -sv12 {tb_rel}
 
 # Elaborate the design
-elaborate -top {top_module} -create_related_covers {{witness precondition}} -auto_hr_info
+elaborate -top {top_module} -create_related_covers {{witness precondition}}
 
 # Set up clock
 clock {clock_signal}
@@ -195,7 +201,7 @@ set_prove_time_limit {config.prove_time_limit}
 # set_proofgrid_manager on
 
 # Run formal verification
-autoprove -all
+prove -all
 
 # Generate report
 report

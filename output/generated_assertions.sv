@@ -1,33 +1,28 @@
-as__fifo_wr_ack: assert property (@(posedge clk) disable iff (!rst_n) (!full && wr_en) |-> wr_ack);
+as__empty_after_reset: assert property ($rose(rst_n) |=> fifo.empty);
 
-as__fifo_full_and_overflow: assert property (
-    @(posedge clk) disable iff (!rst_n)
-    (fifo.wr_ptr == fifo.rd_ptr) |-> (fifo.full && (fifo.wr_en |-> fifo.overflow))
-);
+assert property (@(posedge clk) $rose(rst_n) |=> !full && !almost_full);
 
-as__fifo_read_data_correct: assert property (@(posedge clk) disable iff (!rst_n) (!empty && rd_en) |=> (data_out == mem[rd_ptr]));
+assert property (@(posedge clk) (wr_en && full) |=> full);
 
-as__fifo_empty: assert property (@(posedge clk) (fifo.empty |-> fifo.empty));
+as__fifo_overflow: assert property (@(posedge clk) disable iff (!rst_n) (full && wr_en) |-> overflow);
 
-as__fifo_underflow: assert property (@(posedge clk) (fifo.empty && fifo.rd_en |-> fifo.underflow));
+as__fifo_underflow: assert property (@(posedge clk) disable iff (!rst_n) (rd_en && empty) |-> underflow);
 
-as__fifo_almostfull: assert property (@(posedge clk) disable iff (!rst_n)
-                                     ($countones(valid_entries) == (DEPTH-1)) |-> almostfull);
+as__read_follows_write: 
+  assert property (@(posedge clk) 
+    (wr_en && !full) |-> ##(FIFO_DEPTH-1) 
+      ((!$past(wr_en,1) throughout (##(FIFO_DEPTH-2))) && rd_en |-> (data_out == $past(data_in,FIFO_DEPTH-1))));
 
-as__fifo_almostempty: assert property (@(posedge clk) disable iff (!rst_n)
-                                       $past(wr_ptr - rd_ptr == 1) |-> almostempty);
+as__wr_ack_after_successful_write: assert property (@(posedge clk) (wr_en && !full) |=> wr_ack);
 
-as__ctrl_reset: assert property (@(posedge clk) $past(rst_n) |-> (full == 0) && (almostfull == 0) && (empty == 1) && 
-                                 (almostempty == 1) && (overflow == 0) && (underflow == 0) && (wr_ack == 0));
+as__almost_full_when_one_entry_left:
+    assert property ($countones(~fifo.valid) == 1 |-> fifo.almost_full);
 
-as__fifo_simul_access_priority: assert property (
-    @(posedge clk) disable iff (!rst_n)
-    (wr_en && rd_en) |-> 
-        ((empty && $stable(rd_ptr) && $past(wr_ptr) != wr_ptr) ||
-         (full && $stable(wr_ptr) && $past(rd_ptr) != rd_ptr))
-);
+as__fifo_almost_empty: assert property ($countones({fifo.buffer_valid_reg}) == 1 |-> fifo.almost_empty);
 
-as__no_simultaneous_overflow_underflow: assert property (@(posedge clk) disable iff (!rst_n) !($rose(overflow) && $rose(underflow)));
+assert property (@(posedge clk) (full && rd_en && wr_en) |=> (!data_out_valid && rd_ack));
 
-as__data_out_stable_when_not_reading: assert property (@(posedge clk) disable iff (!rst_n) !rd_en |-> $stable(data_out));
+as__simultaneous_rdwr_empty_write_succeeds:
+    assert property (@(posedge clk) disable iff (!rst_n)
+        (rd_en && wr_en && empty) |=> (wr_ack && !empty));
 
