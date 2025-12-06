@@ -173,10 +173,63 @@ def get_quality_assertions(examples: List[Dict[str, str]], count: int = 10) -> L
     return [ex['assertion'] for score, ex in scored_examples[:count]]
 
 
+def load_tcl_examples(examples_dir: str = "examples") -> List[str]:
+    """
+    Load JasperGold TCL scripts from examples directory.
+
+    Args:
+        examples_dir: Path to the examples directory
+
+    Returns:
+        List of TCL script contents
+    """
+    tcl_examples = []
+    examples_path = Path(examples_dir)
+
+    if not examples_path.exists():
+        print(f"Warning: Examples directory '{examples_dir}' not found")
+        return tcl_examples
+
+    # Find all FPV.tcl files
+    tcl_files = list(examples_path.glob("*/FPV.tcl"))
+
+    for tcl_file in tcl_files:
+        try:
+            with open(tcl_file, 'r') as f:
+                content = f.read()
+                tcl_examples.append(content)
+                print(f"Loaded TCL example from {tcl_file.parent.name}/FPV.tcl")
+        except Exception as e:
+            print(f"Warning: Could not read {tcl_file}: {e}")
+
+    return tcl_examples
+
+
+def create_tcl_few_shot_prompt(tcl_examples: List[str]) -> str:
+    """
+    Create a prompt with TCL examples for few-shot learning.
+
+    Args:
+        tcl_examples: List of TCL script contents
+
+    Returns:
+        Formatted prompt string with examples
+    """
+    prompt = "Reference JasperGold TCL Examples:\n\n"
+
+    for i, example in enumerate(tcl_examples, 1):
+        prompt += f"Example {i}:\n"
+        prompt += "```tcl\n"
+        prompt += example
+        prompt += "\n```\n\n"
+
+    return prompt
+
+
 if __name__ == "__main__":
     # Test the loader
     examples = load_examples_from_directory()
-    print(f"\nTotal examples loaded: {len(examples)}")
+    print(f"\nTotal SVA examples loaded: {len(examples)}")
 
     if examples:
         print(f"\nSample assertion:")
@@ -186,3 +239,13 @@ if __name__ == "__main__":
         quality = get_quality_assertions(examples, 5)
         for i, assertion in enumerate(quality, 1):
             print(f"\n{i}. {assertion[:150]}...")
+
+    # Test TCL loading
+    print("\n" + "="*80)
+    tcl_examples = load_tcl_examples()
+    print(f"\nTotal TCL examples loaded: {len(tcl_examples)}")
+    if tcl_examples:
+        print(f"\nFirst TCL example (first 20 lines):")
+        lines = tcl_examples[0].split('\n')[:20]
+        for line in lines:
+            print(f"  {line}")

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a **multi-stage SystemVerilog Assertion (SVA) generation pipeline** that uses LLMs to generate formal verification code from hardware design specifications. The project specifically targets a Synchronous FIFO design.
 
-### Three-Stage Pipeline Architecture
+### Four-Stage Pipeline Architecture
 
 1. **Stage 1 (stage1.py)**: Specification → Assertion Prompts
    - Input: Hardware specification (Markdown)
@@ -34,6 +34,19 @@ This is a **multi-stage SystemVerilog Assertion (SVA) generation pipeline** that
      - DUT instantiation with proper port connections
      - Assertions with correct signal references (DUT.signal for internals)
    - Generates incremental progress file (`output/refined_assertions_progress.sv`)
+
+4. **Stage 4 (stage4.py)**: Generate JasperGold TCL Script
+   - Input: Testbench file, RTL file, configuration
+   - Output: JasperGold TCL script (`output/jaspergold_fpv.tcl`)
+   - Model: Local LM Studio (gpt-oss-20b) via DSPy
+   - **Uses few-shot learning** with 4 TCL examples from `examples/`
+   - Generates complete TCL script with:
+     - analyze commands for RTL and testbench
+     - elaborate command with top module
+     - clock and reset setup
+     - proof configuration settings
+     - autoprove command
+     - report generation
 
 ### Key Design Patterns
 
@@ -71,22 +84,56 @@ The `example_loader.py` module:
 # Ensure .env file contains:
 OPENROUTER_API_KEY=<your-key>
 
-# Ensure LM Studio is running on localhost:1234 for Stage 3
+# Ensure LM Studio is running on localhost:1234 for Stages 3 & 4
 ```
 
-### Commands
+### Quick Start
 
-Run each stage sequentially:
+```bash
+# Run all stages at once
+uv run main.py --all
+
+# Or run with custom RTL file
+uv run main.py --all --rtl design/UART.sv --top UART --spec design/uart_spec.md
+```
+
+### Running Individual Stages
 
 ```bash
 # Stage 1: Generate assertion prompts from specification
-python main.py --stage 1 --spec_path design/specification.md
+uv run main.py --stage 1
 
 # Stage 2: Generate SystemVerilog assertions from prompts
-python main.py --stage 2
+uv run main.py --stage 2
 
-# Stage 3: Refine assertions and generate formal verification code
-python main.py --stage 3
+# Stage 3: Generate testbench with DUT instantiation
+uv run main.py --stage 3
+
+# Stage 4: Generate JasperGold TCL script
+uv run main.py --stage 4
+
+# Or run multiple stages
+uv run main.py --stage 2 3 4
+```
+
+### Configuration
+
+The pipeline uses `config.py` for configuration. Default settings:
+- RTL file: `design/FIFO.sv`
+- Specification: `design/specification.md`
+- Top module: `FIFO` (extracted from RTL)
+- Clock signal: `clk`
+- Reset signal: `rst_n` (active low)
+
+To override:
+```bash
+uv run main.py --all \
+  --rtl design/MyModule.sv \
+  --top MyModule \
+  --spec design/my_spec.md \
+  --clock sys_clk \
+  --reset sys_rst \
+  --reset-active-high
 ```
 
 Each stage depends on outputs from the previous stage stored in `output/`.
@@ -98,24 +145,31 @@ design/
   ├── FIFO.sv              # RTL design module
   └── specification.md      # Hardware specification
 examples/                   # Few-shot learning examples
-  ├── ft_fifo/sva/
-  │   └── fifo_prop.sv     # 20 FIFO assertions
-  ├── ft_mmu/sva/
-  │   └── mmu_prop.sv      # 22 MMU assertions
-  ├── ft_tlb/sva/
-  │   └── tlb_prop.sv      # 68 TLB assertions
-  └── ft_ptw/sva/
-      └── ptw_prop.sv      # 118 PTW assertions
+  ├── ft_fifo/
+  │   ├── sva/fifo_prop.sv # 20 FIFO assertions
+  │   └── FPV.tcl          # JasperGold TCL script
+  ├── ft_mmu/
+  │   ├── sva/mmu_prop.sv  # 22 MMU assertions
+  │   └── FPV.tcl
+  ├── ft_tlb/
+  │   ├── sva/tlb_prop.sv  # 68 TLB assertions
+  │   └── FPV.tcl
+  └── ft_ptw/
+      ├── sva/ptw_prop.sv  # 118 PTW assertions
+      └── FPV.tcl
 output/                     # Generated files (created by pipeline)
   ├── assertion_prompts.txt
   ├── generated_assertions.sv
-  ├── refined_assertions_progress.sv  # Incremental progress
-  └── formal_verification.sv
-example_loader.py           # Loads and parses SVA examples
+  ├── formal_verification.sv           # Testbench
+  ├── refined_assertions_progress.sv   # Incremental progress
+  └── jaspergold_fpv.tcl              # JasperGold script
+config.py                   # Configuration (RTL paths, clock/reset, etc.)
+example_loader.py           # Loads SVA and TCL examples
 stage1.py                   # Stage 1: Spec → Prompts
 stage2.py                   # Stage 2: Prompts → Assertions (uses examples)
-stage3.py                   # Stage 3: Assertions → Verification (uses examples)
-main.py                     # CLI entry point
+stage3.py                   # Stage 3: Assertions → Testbench (uses examples)
+stage4.py                   # Stage 4: Generate JasperGold TCL (uses examples)
+main.py                     # Pipeline orchestration
 ```
 
 ## Working with the Codebase
@@ -193,6 +247,25 @@ Stage 3 contains the most complex logic:
 - `extract_assertion_from_thinking()`: Extracts SV code from thinking model output
 - `generate_formal_verification_code()`: Main orchestration function
 - Uses DSPy signature: `AssertionRefinement` for assertion refinement with few-shot examples
+
+### Stage 4: JasperGold TCL Generation
+
+Stage 4 generates a TCL script for running formal verification with JasperGold:
+- Uses few-shot learning with 4 TCL examples from `examples/*/FPV.tcl`
+- Generates analyze commands for both RTL and testbench
+- Sets up clock and reset signals
+- Configures proof settings (time limit, proofgrid, etc.)
+- If LLM generation fails, falls back to template-based generation
+
+**Running the generated TCL:**
+```bash
+# After running all stages
+jaspergold output/jaspergold_fpv.tcl
+
+# Or in JasperGold GUI
+jaspergold
+# Then: source output/jaspergold_fpv.tcl
+```
 
 ### Understanding DSPy Usage
 

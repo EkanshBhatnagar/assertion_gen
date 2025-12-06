@@ -56,3 +56,11 @@ Thumbs.db
 
 # Test files (optional - uncomment if you want to ignore test files)
 # test_*.py
+
+# Old/backup files
+main_old.py
+*_old.py
+*.bak
+
+# Documentation for Claude Code
+CLAUDE.md
