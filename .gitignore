@@ -37,3 +37,23 @@ dist/
 
 # Output
 output/
+
+# IDE and Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+*~
+
+# OS specific
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Test files (optional - uncomment if you want to ignore test files)
+# test_*.py
