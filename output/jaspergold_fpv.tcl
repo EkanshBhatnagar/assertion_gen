@@ -1,32 +1,32 @@
-# Clear previous analysis state
+# ------------------------------------------------------------
+# JasperGold Formal Verification Script for FIFO_tb
+# ------------------------------------------------------------
+
+# 1. Analyze design files (clear previous analysis)
 analyze -clear
-
-# Analyze RTL design file (SystemVerilog 2012)
-analyze -sv12 design/ARBITER.sv
-
-# Analyze testbench file (relative path)
+analyze -sv12 design/FIFO.sv
 analyze -sv12 output/formal_verification.sv
 
-# Elaborate the design with the specified top module and requested covers
-elaborate -top rr_arbiter_tb -create_related_covers {witness precondition}
+# 2. Elaborate the design with related covers
+elaborate -top FIFO_tb -create_related_covers {witness precondition}
 
-# Set up clock and reset signals
+# 3. Clock and reset configuration
 clock clk
 reset -expression (!rst_n)
 
-# Get design information to check general complexity
+# 4. Get design information (complexity check)
 get_design_info
 
-# Proof settings
+# 5. Proof settings
 set_word_level_reduction on
 set_prove_time_limit 72h
 
-# (Optional) Configure ProofGrid if available
+# Optional: increase parallelism if available
 #set_proofgrid_max_jobs 180
 #set_proofgrid_manager on
 
-# Run formal verification
+# 6. Run the formal proof (full proof, not auto)
 prove -all
 
-# Report proof results
+# 7. Report results
 report
