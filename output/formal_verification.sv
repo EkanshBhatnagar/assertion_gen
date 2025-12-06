@@ -67,55 +67,27 @@ module FIFO_tb;
     default disable iff (!rst_n);
 
     // Formal Verification Assertions
-    assert property ($rose(DUT.rst_n) |=> DUT.empty);
+    as__empty_after_reset: assert property ($rose(rst_n) |=> fifo.empty);
 
-    assert property (@(posedge clk)
-        (DUT.wr_en && DUT.full) |=> ##1 (DUT.count == $past(DUT.count))
-    );
+    assert property (@(posedge clk) $rose(rst_n) |=> !full && !almost_full);
 
-    assert property (@(posedge clk) ((DUT.rd_en && DUT.empty)) |-> DUT.underflow);
+    assert property (@(posedge clk) (wr_en && full) |=> full);
 
-    assert property (@(posedge clk) disable iff (!rst_n) (DUT.wr_en && !DUT.full) |-> ##1 DUT.wr_ack);
+    as__fifo_overflow: assert property (@(posedge clk) disable iff (!rst_n) (full && wr_en) |-> overflow);
 
-    assert property (
-        @(posedge clk)
-        disable iff (!rst_n)
-        (DUT.count == 1'b1) |-> almostempty
-    );
+    as__fifo_underflow: assert property (@(posedge clk) disable iff (!rst_n) (DUT.rd_en && DUT.empty) |-> DUT.underflow);
 
-    assert property (@(posedge clk)
-      (DUT.wr_en && DUT.rd_en && DUT.empty) |=> ##1 DUT.wr_ack);
+    as__read_follows_write: assert property (@(posedge clk) (wr_en && !full) |-> ##(FIFO_DEPTH-1) ((!$past(wr_en,1) throughout (##(FIFO_DEPTH-2))) && rd_en |-> (data_out == $past(data_in,FIFO_DEPTH-1))));
 
-    assert property (@(posedge DUT.clk) disable iff (!DUT.rst_n)
-        (DUT.wr_en && !DUT.full) |=> DUT.wr_ack);
+    as__wr_ack_after_successful_write: assert property (@(posedge clk) (DUT.wr_en && !DUT.full) |=> DUT.wr_ack);
 
-    assert property (@(posedge clk)
-        (DUT.wr_en && !DUT.full) |-> ##7);
+    as__almost_full_when_one_entry_left: assert property (@(posedge clk) (DUT.count == FIFO_DEPTH-1) |-> DUT.almostfull);
 
-    assert property (@(posedge clk)
-      (! $past(DUT.wr_en,1) throughout ##(DUT.FIFO_DEPTH-2)) |-> (DUT.rd_en |=> (DUT.data_out == $past(DUT.data_in,DUT.FIFO_DEPTH-1)))
-    );
+    as__fifo_almost_empty: assert property (@(posedge clk) (DUT.count == 1) |-> DUT.almostempty);
 
-    assert property (@(posedge clk) (DUT.wr_en && !DUT.full) |=> DUT.wr_ack);
+    assert property (@(posedge clk) (full && rd_en && wr_en) |=> (!data_out_valid && rd_ack));
 
-    assert property (@(posedge clk)
-        (DUT.count == FIFO_DEPTH-1) |-> ##0 DUT.almostfull);
-
-    assert property ($countones(~DUT.valid) == 1 |-> DUT.almostfull);
-
-    assert property ((DUT.count == 1) |-> DUT.almostempty);
-
-    assert property (@(posedge clk)
-        (DUT.full && DUT.rd_en && DUT.wr_en) |=> (!DUT.wr_ack));
-
-    assert property (@(posedge clk)
-      (DUT.empty && DUT.wr_en && DUT.rd_en) |-> (DUT.wr_ack && !DUT.underflow));
-
-    assert property (@(posedge clk) disable iff (!DUT.rst_n)
-        (DUT.wr_en && !DUT.full) |-> ##0 (DUT.wr_ack));
-
-    assert property (@(posedge clk)
-        (DUT.rd_en && DUT.wr_en && DUT.empty) |=> (DUT.wr_ack && !DUT.empty));
+    as__simultaneous_rdwr_empty_write_succeeds: assert property (@(posedge clk) disable iff (!rst_n) (rd_en && wr_en && empty) |=> (wr_ack && !empty));
 
 endmodule
 

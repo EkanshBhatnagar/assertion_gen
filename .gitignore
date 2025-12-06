@@ -64,5 +64,8 @@ main_old.py
 
 # Documentation for Claude Code
 CLAUDE.md
-TIMING_IMPROVEMENTS.md          
+TIMING_IMPROVEMENTS.md
 temporal_operators_guide.md
+ASSERTION_VALIDATION.md
+ASSERTION_PARSING_FIX.md
+STAGE4_IMPLEMENTATION.md

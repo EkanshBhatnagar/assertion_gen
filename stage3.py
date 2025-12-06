@@ -18,11 +18,45 @@ class AssertionRefinement(dspy.Signature):
     5. Ensure proper SystemVerilog assertion syntax
     6. Keep assertion label with correct prefix (as__, am__, co__)
     7. For internal signals, use hierarchical notation like FIFO.wr_ptr
+
+    CRITICAL - DO NOT generate malformed assertions:
+    - NEVER end with just |-> or |=> without a consequent
+    - NEVER use patterns like "|-> ##N;" (implication to delay with nothing after)
+    - NEVER put the label inside assert property() - WRONG: "assert property (label: @(posedge clk)...)"
+    - CORRECT label placement: "label: assert property (@(posedge clk)...)"
+    - ALWAYS ensure complete structure: condition |-> consequent; or condition |=> consequent;
+    - Examples of CORRECT assertions:
+      * as__test: assert property (@(posedge clk) wr_en && !full |=> wr_ack);
+      * as__full: assert property (@(posedge clk) count == DEPTH |-> full);
+      * req |-> ##3 ack  (NOT "req |-> ##3;")
+    - If you cannot generate a valid assertion, keep the original unchanged
     """
     human_description = dspy.InputField(desc="The original human language description of what the assertion should check")
     generated_assertion = dspy.InputField(desc="The SystemVerilog assertion that needs refinement")
     signal_info = dspy.InputField(desc="Information about module signals, ports, and internal signals")
-    refined_assertion = dspy.OutputField(desc="The refined SystemVerilog assertion with correct signal names and syntax")
+    refined_assertion = dspy.OutputField(desc="The refined SystemVerilog assertion with correct signal names and COMPLETE, VALID syntax. Label must be OUTSIDE assert property().")
+
+
+class AssertionSyntaxFix(dspy.Signature):
+    """
+    Fix SystemVerilog assertion syntax errors based on validator feedback.
+
+    You are given an assertion that failed syntax validation and the specific errors found.
+    Your job is to fix ONLY the syntax errors while preserving the assertion's intent and logic.
+
+    Common syntax errors to fix:
+    1. Label inside assert property: "assert property (label: @..." -> "label: assert property (@..."
+    2. Missing semicolon at end
+    3. Unbalanced parentheses
+    4. Incorrect temporal operator usage
+    5. Invalid delay syntax (##N should be followed by consequent)
+
+    DO NOT change the assertion logic or signals - only fix syntax!
+    """
+    original_assertion = dspy.InputField(desc="The assertion with syntax errors")
+    syntax_errors = dspy.InputField(desc="Specific syntax errors found by the validator")
+    signal_info = dspy.InputField(desc="Available signals for reference")
+    fixed_assertion = dspy.OutputField(desc="The assertion with syntax errors fixed, preserving original logic")
 
 def extract_signal_info(rtl_code: str) -> tuple:
     """
@@ -151,6 +185,79 @@ def clean_assertion(assertion: str) -> str:
 
     return assertion
 
+def validate_assertion(assertion: str) -> bool:
+    """
+    Validate that an assertion is well-formed.
+
+    Args:
+        assertion: The assertion string to validate
+
+    Returns:
+        True if valid, False otherwise
+    """
+    # Must contain 'assert' and end with semicolon
+    if 'assert' not in assertion.lower():
+        return False
+
+    if not assertion.strip().endswith(';'):
+        return False
+
+    # Check for malformed patterns
+    malformed_patterns = [
+        r'\|->\s*##\d+\s*\)?;',  # |-> ##N); (implication to delay with no consequent)
+        r'\|=>\s*##\d+\s*\)?;',  # |=> ##N); (similar issue)
+        r'\|->\s*\)?;',          # |-> ); (implication with no consequent)
+        r'\|=>\s*\)?;',          # |=> ); (similar issue)
+        r'property\s*\(\s*\)',  # empty property
+        r'@\(posedge\s+\w+\)\s*;',  # Ends right after clock edge: @(posedge clk);
+        r'@\(posedge\s+\w+\)\s*$',  # Ends right after clock edge (no semicolon)
+        r'property\s*\(\s*@\(posedge\s+\w+\)\s*\)',  # property (@(posedge clk)) - no condition
+        r'disable\s+iff\s*\([^)]*\)\s*;',  # disable iff (...); - nothing after
+        r'disable\s+iff\s*\([^)]*\)\s*$',  # disable iff (...) - ends abruptly
+    ]
+
+    for pattern in malformed_patterns:
+        if re.search(pattern, assertion):
+            return False
+
+    # Check for incomplete property structure
+    # An assertion should have actual logic after the timing spec
+    # Look for property with @(posedge...) that doesn't have a condition/implication
+    if 'property' in assertion.lower():
+        # After @(posedge clk) and optional disable iff, there should be some logic
+        # Match: property ( @(posedge clk) <optional disable iff> <MUST HAVE LOGIC HERE> )
+
+        # Strip to check if there's actual content after timing specs
+        stripped = assertion
+        # Remove label if present
+        stripped = re.sub(r'^\w+\s*:\s*', '', stripped)
+        # Remove 'assert property'
+        stripped = re.sub(r'assert\s+property\s*\(', '', stripped, flags=re.IGNORECASE)
+        # Remove clock spec
+        stripped = re.sub(r'@\(posedge\s+\w+\)', '', stripped)
+        # Remove disable iff
+        stripped = re.sub(r'disable\s+iff\s*\([^)]+\)', '', stripped)
+        # Remove closing paren and semicolon
+        stripped = re.sub(r'\)\s*;?\s*$', '', stripped)
+
+        # After all that, there should be meaningful content left
+        stripped = stripped.strip()
+        if not stripped or len(stripped) < 3:  # Too short to be meaningful
+            return False
+
+        # Check if it only contains whitespace, parens, and semicolons
+        if re.match(r'^[\s();]*$', stripped):
+            return False
+
+    # Check for balanced parentheses
+    open_count = assertion.count('(')
+    close_count = assertion.count(')')
+    if open_count != close_count:
+        return False
+
+    return True
+
+
 def extract_assertion_from_thinking(output: str) -> str:
     """
     Extract the actual SystemVerilog assertion from thinking model output.
@@ -165,44 +272,65 @@ def extract_assertion_from_thinking(output: str) -> str:
     # Try to find SystemVerilog code blocks first
     code_block_match = re.search(r'```(?:systemverilog)?\s*(.*?)```', output, re.DOTALL)
     if code_block_match:
-        return code_block_match.group(1).strip()
+        extracted = code_block_match.group(1).strip()
+        if validate_assertion(extracted):
+            return extracted
 
-    # Look for assertion keywords
+    # Look for complete assertions with better patterns
+    # Updated to better handle multi-line assertions
     assertion_patterns = [
-        r'(assert\s+property\s*\([^;]+\);)',
+        # Match: label: assert property (@(posedge clk) disable iff (...) condition |-> consequent);
+        r'(\w+\s*:\s*assert\s+property\s*\((?:[^;])+;)',
+        # Match: assert property (@(posedge clk) ...) with balanced parens
+        r'(assert\s+property\s*\((?:[^()]|\([^()]*\))*\)\s*;)',
+        # Match multi-line: captures everything from assert to semicolon
+        r'(assert\s+property\s*\([\s\S]*?\)\s*;)',
+        # Named properties
         r'(property\s+\w+\s*;[\s\S]*?endproperty[\s\S]*?assert\s+property[^;]+;)',
-        r'(sequence\s+\w+\s*;[\s\S]*?endsequence)',
     ]
 
     for pattern in assertion_patterns:
         match = re.search(pattern, output, re.MULTILINE | re.DOTALL)
         if match:
-            return match.group(1).strip()
+            extracted = match.group(1).strip()
+            # Normalize whitespace for multi-line assertions
+            extracted = re.sub(r'\s+', ' ', extracted)
+            if validate_assertion(extracted):
+                return extracted
 
-    # If no specific pattern found, try to extract the last non-thinking line
-    # Thinking models often put their reasoning in <thinking> tags or at the start
+    # Try to extract multi-line assertions
     lines = output.split('\n')
+    assertion_lines = []
+    in_assertion = False
 
-    # Remove lines that look like thinking/reasoning
-    filtered_lines = []
-    skip_thinking = False
     for line in lines:
-        if '<thinking>' in line.lower() or line.strip().startswith('//') and 'think' in line.lower():
-            skip_thinking = True
+        # Skip thinking/comment blocks
+        if '<thinking>' in line.lower() or '</thinking>' in line.lower():
             continue
-        if '</thinking>' in line.lower():
-            skip_thinking = False
+        if line.strip().startswith('//'):
             continue
-        if not skip_thinking and line.strip():
-            filtered_lines.append(line)
 
-    # Find the longest line that looks like an assertion
-    for line in reversed(filtered_lines):
-        if 'assert' in line or 'property' in line:
-            return line.strip()
+        # Start of assertion
+        if 'assert' in line.lower() and 'property' in line.lower():
+            in_assertion = True
+            assertion_lines = [line]
+        elif in_assertion:
+            assertion_lines.append(line)
+            if ';' in line:
+                # End of assertion
+                combined = ' '.join(assertion_lines)
+                if validate_assertion(combined):
+                    return combined.strip()
+                in_assertion = False
+                assertion_lines = []
 
-    # Fallback: return the cleaned original
-    return clean_assertion(output)
+    # Fallback: return the cleaned original if it validates
+    cleaned = clean_assertion(output)
+    if validate_assertion(cleaned):
+        return cleaned
+
+    # Last resort: return as-is (will be caught downstream)
+    return cleaned
 
 def generate_testbench_code(module_name: str, ports: List[dict], params: List[dict],
                             internals: List[dict], assertions: str) -> str:
@@ -326,6 +454,89 @@ def load_human_descriptions(prompts_file: str = "output/assertion_prompts.txt") 
         print(f"Warning: Could not find {prompts_file}, proceeding without human descriptions")
         return []
 
+
+def parse_assertions_from_file(file_content: str) -> List[str]:
+    """
+    Parse assertions from a file, properly handling multi-line assertions.
+
+    An assertion starts with 'assert property' or 'label: assert property'
+    and ends with a semicolon. Labels can be on a separate line.
+
+    Args:
+        file_content: Content of the assertions file
+
+    Returns:
+        List of complete assertions (each as a single string)
+    """
+    assertions = []
+    lines = file_content.split('\n')
+    current_assertion = []
+    in_assertion = False
+    pending_label = None
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Skip empty lines when not in an assertion
+        if not stripped and not in_assertion:
+            continue
+
+        # Check if this is a standalone label (label: on its own line)
+        label_only_match = re.match(r'^(\w+)\s*:\s*$', stripped)
+        if label_only_match and not in_assertion:
+            # Save this label for the next assertion
+            pending_label = stripped
+            continue
+
+        # Check if this line starts an assertion
+        # Patterns: "assert property" or "label: assert property"
+        if re.search(r'(^\w+\s*:\s*assert\s+property)|(^assert\s+property)', stripped, re.IGNORECASE):
+            # If we were already building an assertion, save it
+            if in_assertion and current_assertion:
+                assertions.append(' '.join(current_assertion))
+                current_assertion = []
+
+            in_assertion = True
+
+            # If we have a pending label, prepend it
+            if pending_label:
+                current_assertion = [pending_label, stripped]
+                pending_label = None
+            else:
+                current_assertion = [stripped]
+
+            # Check if it ends on the same line
+            if ';' in stripped:
+                assertions.append(' '.join(current_assertion))
+                current_assertion = []
+                in_assertion = False
+
+        elif in_assertion:
+            # Continue building the current assertion
+            current_assertion.append(stripped)
+
+            # Check if this line ends the assertion
+            if ';' in stripped:
+                assertions.append(' '.join(current_assertion))
+                current_assertion = []
+                in_assertion = False
+
+    # Handle case where file ended while still in assertion
+    if current_assertion:
+        assertions.append(' '.join(current_assertion))
+
+    # Clean up: normalize whitespace and filter out incomplete assertions
+    cleaned_assertions = []
+    for assertion in assertions:
+        # Normalize multiple spaces to single space
+        cleaned = re.sub(r'\s+', ' ', assertion).strip()
+
+        # Only add if it contains 'assert property' and ends with semicolon
+        if cleaned and 'assert property' in cleaned.lower() and cleaned.endswith(';'):
+            cleaned_assertions.append(cleaned)
+
+    return cleaned_assertions
+
 def generate_formal_verification_code(assertions: List[str], rtl_code: str) -> str:
     """
     Generates formal verification code using locally hosted LM Studio model (gpt-oss-20b).
@@ -393,10 +604,21 @@ def generate_formal_verification_code(assertions: List[str], rtl_code: str) -> s
     # Instantiate refiner
     refiner = AssertionRefiner()
 
+    # Initialize validator for syntax checking
+    try:
+        from sv_validator import SVValidator
+        validator = SVValidator()
+        print("✓ SystemVerilog validator initialized (Verilator)")
+        use_validator = True
+    except Exception as e:
+        print(f"⚠ Warning: Could not initialize validator: {e}")
+        print("  Continuing without syntax validation")
+        use_validator = False
+
     # Refine each assertion
     refined_assertions = []
     print("\n" + "="*80)
-    print("REFINING ASSERTIONS")
+    print("REFINING ASSERTIONS WITH SYNTAX VALIDATION")
     print("="*80)
 
     # Create output directory and prepare incremental output file
@@ -420,6 +642,11 @@ def generate_formal_verification_code(assertions: List[str], rtl_code: str) -> s
         print(f"\n[{i}/{len(assertions)}] Original assertion:")
         print(f"  {assertion_clean[:100]}...")
 
+        # Validate the original assertion from Stage 2
+        original_is_valid = validate_assertion(assertion_clean)
+        if not original_is_valid:
+            print(f"  ⚠ Warning: Original from Stage 2 is malformed - will attempt to fix")
+
         # Get corresponding human description if available
         human_desc = human_descriptions[i-1] if i-1 < len(human_descriptions) else "No description available"
         print(f"  Human description: {human_desc[:80]}...")
@@ -440,14 +667,106 @@ def generate_formal_verification_code(assertions: List[str], rtl_code: str) -> s
 
             # Validate it's not empty after extraction
             if not refined or len(refined) < 10:
-                print(f"  Warning: Extracted assertion too short, using original")
-                refined = assertion_clean
+                print(f"  Warning: Extracted assertion too short")
+                if original_is_valid:
+                    print(f"    → Using original (valid)")
+                    refined = assertion_clean
+                else:
+                    print(f"    → Original also invalid, skipping this assertion")
+                    continue
             else:
                 print(f"  Refined: {refined[:100]}...")
+
+            # Validate the assertion is well-formed (pattern-based)
+            if not validate_assertion(refined):
+                print(f"  ✗ Warning: Assertion failed pattern validation (malformed)")
+                if original_is_valid:
+                    print(f"    → Reverting to original (valid)")
+                    refined = assertion_clean
+                else:
+                    print(f"    → Original also invalid, skipping this assertion")
+                    continue
+
+            # Syntax validation with Verilator (if available)
+            if use_validator:
+                is_valid, errors = validator.validate_assertion(refined)
+                if not is_valid:
+                    print(f"  ✗ Syntax errors detected ({len(errors)} errors)")
+                    for err in errors[:3]:  # Show first 3 errors
+                        print(f"      - {err}")
+
+                    # Try to fix syntax errors with feedback loop (max 2 attempts)
+                    fix_attempt = 0
+                    max_fix_attempts = 2
+                    while not is_valid and fix_attempt < max_fix_attempts:
+                        fix_attempt += 1
+                        print(f"  🔧 Attempting syntax fix (attempt {fix_attempt}/{max_fix_attempts})...")
+
+                        # Create error message for LLM
+                        error_msg = "\n".join([f"- {err}" for err in errors[:5]])
+
+                        try:
+                            # Use DSPy to fix syntax
+                            syntax_fixer = dspy.ChainOfThought(AssertionSyntaxFix)
+                            fix_result = syntax_fixer(
+                                original_assertion=refined,
+                                syntax_errors=error_msg,
+                                signal_info=signal_info
+                            )
+
+                            fixed = fix_result.fixed_assertion.strip()
+                            fixed = clean_assertion(fixed)
+                            fixed = extract_assertion_from_thinking(fixed)
+
+                            # Validate the fix
+                            is_valid, errors = validator.validate_assertion(fixed)
+                            if is_valid:
+                                print(f"  ✓ Syntax fixed successfully!")
+                                refined = fixed
+                                break
+                            else:
+                                print(f"  ⚠ Fix attempt {fix_attempt} still has errors")
+                        except Exception as e:
+                            print(f"  ⚠ Fix attempt {fix_attempt} failed: {e}")
+                            break
+
+                    # If still invalid after attempts, check if original is valid
+                    if not is_valid:
+                        print(f"  ✗ Could not fix syntax errors")
+                        if original_is_valid:
+                            print(f"    → Reverting to original (valid)")
+                            refined = assertion_clean
+                        else:
+                            print(f"    → Original also invalid, skipping this assertion")
+                            continue
+                else:
+                    print(f"  ✓ Syntax validation passed")
 
             # Update signal references (DUT.signal for internal signals)
             refined = update_assertion_signal_references(refined, module_name, ports, internals)
             print(f"  Updated signal references")
+
+            # Final validation after signal updates
+            if not validate_assertion(refined):
+                print(f"  ✗ Warning: Assertion invalid after signal updates")
+                if original_is_valid:
+                    print(f"    → Reverting to original (valid)")
+                    refined = assertion_clean
+                else:
+                    print(f"    → Original also invalid, skipping this assertion")
+                    continue
+
+            # Final syntax check after signal updates (if validator available)
+            if use_validator:
+                is_valid_final, _ = validator.validate_assertion(refined)
+                if not is_valid_final:
+                    print(f"  ✗ Warning: Syntax errors after signal updates")
+                    if original_is_valid:
+                        print(f"    → Reverting to original (valid)")
+                        refined = assertion_clean
+                    else:
+                        print(f"    → Original also invalid, skipping this assertion")
+                        continue
 
             refined_assertions.append(refined)
 
@@ -461,14 +780,26 @@ def generate_formal_verification_code(assertions: List[str], rtl_code: str) -> s
 
         except Exception as e:
             print(f"  Error refining assertion: {e}")
-            # Keep original if refinement fails
-            refined_assertions.append(assertion_clean)
 
-            # Still write to progress file
-            with open(progress_file, "a") as f:
-                f.write(f"// Assertion {len(refined_assertions)} (error, using original)\n")
-                f.write(f"// Human description: {human_desc}\n")
-                f.write(f"{assertion_clean}\n\n")
+            # Only keep original if it's valid
+            if original_is_valid:
+                print(f"    → Using original (valid)")
+                refined_assertions.append(assertion_clean)
+
+                # Write to progress file
+                with open(progress_file, "a") as f:
+                    f.write(f"// Assertion {len(refined_assertions)} (error, using original)\n")
+                    f.write(f"// Human description: {human_desc}\n")
+                    f.write(f"{assertion_clean}\n\n")
+            else:
+                print(f"    → Original also invalid, skipping this assertion")
+
+                # Write to progress file as skipped
+                with open(progress_file, "a") as f:
+                    f.write(f"// Assertion SKIPPED (invalid)\n")
+                    f.write(f"// Human description: {human_desc}\n")
+                    f.write(f"// Original: {assertion_clean}\n")
+                    f.write(f"// Reason: Both original and refined assertions failed validation\n\n")
 
     print(f"\n✓ Progress saved to: {progress_file}")
 
@@ -551,7 +882,9 @@ if __name__ == "__main__":
     # Load assertions from stage 2
     try:
         with open("output/generated_assertions.sv", "r") as f:
-            assertions = f.readlines()
+            file_content = f.read()
+        assertions = parse_assertions_from_file(file_content)
+        print(f"\nParsed {len(assertions)} assertions from Stage 2 output")
     except FileNotFoundError:
         print("Error: generated_assertions.sv not found. Please run stage 2 first.")
         exit(1)

@@ -130,16 +130,19 @@ def run_stage3() -> bool:
     print_banner(3, "Generate Testbench with DUT Instantiation")
 
     try:
-        # Load assertions from Stage 2
+        # Load assertions from Stage 2 (properly handle multi-line assertions)
         with open(config.assertions_file, "r") as f:
-            assertions = f.readlines()
+            file_content = f.read()
+
+        from stage3 import parse_assertions_from_file
+        assertions = parse_assertions_from_file(file_content)
 
         # Load RTL code
         with open(config.rtl_design_file, "r") as f:
             rtl_code = f.read()
 
         print(f"📖 Reading assertions from: {config.assertions_file}")
-        print(f"   Number of assertions: {len([a for a in assertions if a.strip()])}")
+        print(f"   Number of assertions parsed: {len(assertions)}")
         print(f"📖 Reading RTL from: {config.rtl_design_file}")
         print(f"   RTL length: {len(rtl_code)} characters\n")
 
