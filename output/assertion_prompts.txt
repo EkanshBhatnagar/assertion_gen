@@ -1,0 +1,10 @@
+1. Assert that when the FIFO is not full and wr_en is asserted, the wr_ack signal is also asserted.
+2. Assert that when the FIFO is full, the full signal is asserted, and any further write attempts result in the overflow signal being asserted.
+3. Assert that when the FIFO is not empty and rd_en is asserted, the data_out matches the expected value based on the FIFO's internal state.
+4. Assert that when the FIFO is empty, the empty signal is asserted, and any further read attempts result in the underflow signal being asserted.
+5. Assert that when the FIFO has only one empty slot left, the almostfull signal is asserted.
+6. Assert that when the FIFO has only one occupied slot left, the almostempty signal is asserted.
+7. Assert that after a reset (rst_n asserted), all control signals (full, almostfull, empty, almostempty, overflow, underflow, wr_ack) are properly initialized to their default values.
+8. Assert that when both wr_en and rd_en are asserted simultaneously, the FIFO prioritizes writing if it is empty and reading if it is full.
+9. Assert that it is illegal to have both overflow and underflow asserted at the same time.
+10. Assert that the data_out remains stable when rd_en is not asserted.
