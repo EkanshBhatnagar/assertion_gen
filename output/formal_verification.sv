@@ -116,7 +116,7 @@ module FIFO_tb;
     assert property (@(posedge clk)
       ((DUT.wr_en && DUT.rd_en && DUT.rst_n) |-> !DUT.overflow && !DUT.underflow));
 
-    (Empty – no assertion can be generated without a description.)
+    //(Empty – no assertion can be generated without a description.)
 
     assert property (@(posedge clk)
         disable iff (!rst_n)
