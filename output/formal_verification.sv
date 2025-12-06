@@ -67,82 +67,74 @@ module FIFO_tb;
     default disable iff (!rst_n);
 
     // Formal Verification Assertions
-    assert property (@(posedge clk) disable iff (!rst_n) (!DUT.full && DUT.wr_en) |-> DUT.wr_ack);
-
-    assert property (@(posedge clk)
-        disable iff (!rst_n)
-          (|!DUT.empty && DUT.rd_en |-> DUT.data_out == $past(DUT.data_in))
-      );
-
-    as__fifo_empty_underflow: assert property @ (posedge clk)
-
-    assert property (@(posedge clk) (DUT.count == 4'b0001 |-> DUT.almostempty));
-
-    assert property (@(posedge clk) disable iff (!rst_n)
-        (rst_n && !$past(rst_n)) |-> (
-            DUT.full          == 1'b0 &&
-            DUT.almostfull    == 1'b0 &&
-            DUT.empty         == 1'b1 &&
-            DUT.almostempty   == 1'b1 &&
-            DUT.overflow      == 1'b0 &&
-            DUT.underflow     == 1'b0 &&
-            DUT.wr_ack        == 1'b0
-        )
-    );
-
-    assert property (@(posedge clk)
-      ((DUT.wr_en && DUT.rd_en) |-> 
-       ( ($past(DUT.empty) && (DUT.count == $past(DUT.count)+1'b1)) ||
-         ($past(DUT.full)   && (DUT.count == $past(DUT.count)-1'b1)) )
-      );
-
     assert property (
         @(posedge clk)
-        disable iff (!rst_n)
-        ~DUT.rd_en |-> (DUT.data_out == $past(DUT.data_out))
+        disable iff (!DUT.rst_n)
+        (!DUT.full && DUT.wr_en) |-> DUT.wr_ack
     );
-
-    assert property (DUT.count == FIFO_DEPTH-1 |-> DUT.almostfull);
-
-    assert property (DUT.count == 1 |-> DUT.almostempty);
 
     assert property (
-      @(posedge clk)
-      disable iff (!rst_n)
-      (rst_n |=> ##[1:2] (DUT.empty && DUT.count == '0 && DUT.wr_ptr == '0))
+        !DUT.empty && DUT.rd_en |-> DUT.data_out == $past(DUT.mem[DUT.wr_ptr - 1])
     );
 
-    (Empty – no assertion can be generated without a description.)
+    assert property (@(posedge clk) disable iff (!rst_n)
+        (DUT.empty & DUT.rd_en) |-> DUT.underflow);
 
-    assert property (as__fifo_reset_empty:
-        $past(DUT.rst_n) && !DUT.rst_n |=> DUT.empty);
+    assert property (@(posedge clk)
+        (DUT.count == 7) |-> DUT.almostfull);
 
-    assert property (@(posedge DUT.clk)
-      disable iff (!DUT.rst_n)
-        (DUT.wr_en && !DUT.full && !DUT.almostfull && !DUT.overflow |=> DUT.wr_ack));
-
-    assert property (@(posedge clk) DUT.empty |-> (DUT.almostempty && !DUT.underflow && !DUT.wr_ack));
-
-    assert property (@(posedge clk) disable iff (!rst_n) (DUT.wr_en |=> DUT.wr_ack));
+    assert property (@(posedge clk) (DUT.count == 1'b1 |-> DUT.almostempty));
 
     assert property (
-      @(posedge DUT.clk)
-      (DUT.wr_en && DUT.rd_en) |-> (DUT.count == $past(DUT.count)+1'b1)
+      @(posedge clk) disable iff (!rst_n)
+      (DUT.wr_en && DUT.rd_en && DUT.empty)
+      |=> (DUT.count == $past(DUT.count)+1'b1)
     );
+
+    assert property (@(posedge clk) (!DUT.rd_en |-> $stable(DUT.data_out)));
+
+    assert property (@(posedge clk) (DUT.empty && DUT.rd_en) |-> DUT.underflow);
+
+    assert property (@(posedge clk) disable iff (!rst_n)
+        (DUT.almostfull |=> (DUT.count >= 7)));
+
+    assert property (
+      (DUT.count == DUT.FIFO_DEPTH-1) |-> DUT.almostfull
+    );
+
+    assert property (@(posedge clk) disable iff (!rst_n)
+        (DUT.almostempty |-> ##0 (DUT.count <= 2)));
+
+    assert property (@(posedge clk)
+        $past(DUT.count == 1) |-> DUT.almostempty);
+
+    assert property (@(posedge clk)
+      $past(rst_n) |-> (full == 1'b0 && almostfull == 1'b0 && empty == 1'b1));
+
+    assert property (@(posedge DUT.clk) (DUT.almostempty && !DUT.overflow && !DUT.underflow && !DUT.wr_ack));
+
+    assert property (@(posedge clk)
+      ((DUT.wr_en && DUT.rd_en && DUT.rst_n) |-> !DUT.overflow && !DUT.underflow));
 
     (Empty – no assertion can be generated without a description.)
 
     assert property (@(posedge clk)
-      ((DUT.wr_en && DUT.rd_en && !DUT.full && DUT.empty) |-> !DUT.empty));
+        disable iff (!rst_n)
+        (wr_en && rd_en) |-> $stable(DUT.count));
 
-    assert property (@(posedge DUT.clk)
-        (DUT.wr_en && DUT.rd_en && DUT.full && !DUT.empty) |-> !DUT.full);
+    assert property (@(posedge clk)
+        (DUT.empty & $stable(DUT.count) |=> ($past(DUT.wr_ptr) == DUT.wr_ptr)));
+
+    assert property (@(posedge clk)
+        disable iff (!DUT.rst_n)
+        (DUT.full && $stable(DUT.wr_ptr) && ($past(DUT.count) != DUT.count))
+    );
 
     assert property (@(posedge clk) disable iff (!rst_n) (DUT.wr_en |=> DUT.wr_ack));
 
-    assert property (@(posedge DUT.clk) !(DUT.overflow && DUT.underflow));
+    assert property (@(posedge clk) disable iff (!rst_n) !($rose(DUT.overflow) && $rose(DUT.underflow)));
 
-    assert property (!DUT.rd_en |-> $stable(DUT.data_out));
+    assert property (@(posedge DUT.clk) disable iff (!DUT.rst_n) !DUT.rd_en |-> $stable(DUT.data_out));
 
 endmodule
 
