@@ -23,6 +23,11 @@ module rr_arbiter_tb;
 
     // Parameters
     parameter CLIENTS = 4
+)(
+    input  logic                 clk,
+    input  logic                 rst_n,
+    input  logic [CLIENTS-1:0]   req,
+    output logic [CLIENTS-1:0]   gnt
 );
 
     // Port declarations (as logic)
@@ -48,13 +53,21 @@ module rr_arbiter_tb;
     default disable iff (!rst_n);
 
     // Formal Verification Assertions
-    assert property (@(posedge clk) $onehot0(gnt) |-> 1);
+    assert property (@(posedge clk) $onehot0(req) |-> 1);
 
-    as__gnt_req_match: assert property (@(posedge clk) disable iff (!rst_n) gnt |-> req );
+    generate
+        for (genvar i = 0; i < WIDTH; i++) begin
+        gnt_req_match: assert property (@(posedge clk) disable iff (!rst_n) gnt[i] |-> req[i] );
+    end
+    endgenerate
 
-    as__req_gnt_same_cycle: assert property (|req |-> |gnt);
+    as__clk_rst_n_req_gnt_same_cycle: assert property (|clk |-> |rst_n |-> |req |=> |gnt);
 
-    as__round_robin_arb_fairness: assert property (gnt[i] && req[i] |=> gnt[i] && req[i] |-> !gnt[i] throughout ($countones(req & ~(1'b1<<i)) > 0) );
+    generate
+        for (genvar i = 0; i < NUM_REQS; i++) begin
+        as__round_robin_arb_fairness: assert property (gnt[i] && req[i] |=> gnt[i] && req[i] |-> !gnt[i] throughout ($countones(req & ~(1'b1<<i)) > 0) );
+    end
+    endgenerate
 
     assert property (@(posedge clk) disable iff (!rst_n) !rst_n |-> gnt == '0);
 

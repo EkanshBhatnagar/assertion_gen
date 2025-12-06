@@ -6,27 +6,26 @@ from example_loader import load_examples_from_directory, get_quality_assertions
 
 class SimpleAssertionFix(dspy.Signature):
     """
-    Fix signal names in a SystemVerilog assertion to match actual RTL design.
+    You are a SystemVerilog expert. Your task is to fix signal names in a given SystemVerilog construct.
+    You MUST follow these rules strictly.
 
-    You are given an assertion and the ACTUAL signals from the RTL design.
-    Your ONLY job is to fix signal names - nothing else!
+    **Rules:**
+    1.  **PRESERVE `generate` BLOCKS**: If the input is a `generate` block, the `generate...endgenerate` keywords and structure MUST be preserved in the output. DO NOT strip them.
+    2.  **ONLY FIX SIGNAL NAMES**: Your ONLY job is to replace incorrect signal names with the correct ones from the provided `available_signals` list.
+    3.  **DO NOT CHANGE LOGIC**: Do not alter the logic of the assertion or the block.
+    4.  **DO NOT CHANGE TEMPORAL OPERATORS**: Do not change `|=>`, `|->`, `##N`, etc.
+    5.  **DO NOT CHANGE LABELS**: Preserve all assertion or block labels (e.g., `my_label:`).
 
-    Rules:
-    1. Replace wrong signal names with correct ones from the signal list
-    2. Do NOT change temporal operators (|=>, |->, ##N)
-    3. Do NOT add or remove delays
-    4. Do NOT change the assertion logic
-    5. Do NOT move or change labels
-    6. If signal doesn't exist in design, REMOVE that part or use closest match
+    **Input Format:**
+    - `original_assertion`: The SystemVerilog code (can be a single `assert` or a full `generate` block).
+    - `available_signals`: A comma-separated list of valid signal names from the RTL.
 
-    Examples:
-    - "almost_full" → "almostfull" (if almostfull exists)
-    - "fifo.empty" → "empty" (remove module prefix for ports)
-    - Keep everything else exactly the same!
+    **Output Format:**
+    - `fixed_assertion`: The corrected SystemVerilog code, with ONLY the signal names fixed and the original structure (especially `generate` blocks) preserved.
     """
-    original_assertion = dspy.InputField(desc="The assertion with possibly wrong signal names")
+    original_assertion = dspy.InputField(desc="The assertion or generate block with possibly wrong signal names")
     available_signals = dspy.InputField(desc="List of ACTUAL signal names in the RTL design")
-    fixed_assertion = dspy.OutputField(desc="Assertion with ONLY signal names fixed, everything else unchanged")
+    fixed_assertion = dspy.OutputField(desc="The construct with ONLY signal names fixed, preserving the exact original structure")
 
 
 class AssertionSyntaxFix(dspy.Signature):
@@ -189,6 +188,10 @@ def validate_assertion(assertion: str) -> bool:
     Returns:
         True if valid, False otherwise
     """
+    # If the assertion is a generate block, skip strict validation
+    if assertion.strip().lower().startswith('generate') and 'endgenerate' in assertion.lower():
+        return True
+
     # Must contain 'assert' and end with semicolon
     if 'assert' not in assertion.lower():
         return False
@@ -532,7 +535,7 @@ def load_human_descriptions(prompts_file: str = "output/assertion_prompts.txt") 
 
 def parse_assertions_from_file(file_content: str) -> List[str]:
     """
-    Parse assertions from a file, handling multi-line assertions and generate blocks.
+    Parse assertions from a file, assuming they are separated by double newlines.
 
     Args:
         file_content: Content of the assertions file
@@ -540,48 +543,15 @@ def parse_assertions_from_file(file_content: str) -> List[str]:
     Returns:
         List of complete assertions (each as a single string)
     """
-    assertions = []
-    # Regex to find 'assert property' statements, including those within generate blocks
-    # This regex is designed to be more robust for various SVA formats.
-    # It tries to capture the entire assertion from 'assert property' to the closing semicolon,
-    # handling nested parentheses.
-    assertion_pattern = re.compile(
-        r'(generate\s+.*?endgenerate)|' # Capture entire generate blocks first
-        r'(\w+\s*:\s*assert\s+property\s*\(.*?\)\s*;)|' # Labelled assertions
-        r'(assert\s+property\s*\(.*?\)\s*;)', # Unlabelled assertions
-        re.DOTALL | re.IGNORECASE
-    )
+    raw_assertion_blocks = file_content.split('\n\n')
+    cleaned_assertions = []
 
-    matches = assertion_pattern.finditer(file_content)
+    for block in raw_assertion_blocks:
+        cleaned = block.strip()
+        if cleaned: # Only add if the block is not empty after stripping
+            cleaned_assertions.append(cleaned)
 
-    for match in matches:
-        generate_block = match.group(1)
-        labelled_assertion = match.group(2)
-        unlabelled_assertion = match.group(3)
-
-        if generate_block:
-            # If it's a generate block, extract assertions from within it
-            # We need a recursive call or a nested regex for assertions inside generate
-            # For simplicity, let's extract 'assert property' statements inside generate
-            inner_assertion_pattern = re.compile(
-                r'(\w+\s*:\s*assert\s+property\s*\(.*?\)\s*;)|'
-                r'(assert\s+property\s*\(.*?\)\s*;)',
-                re.DOTALL | re.IGNORECASE
-            )
-            inner_matches = inner_assertion_pattern.finditer(generate_block)
-            for inner_match in inner_matches:
-                inner_labelled = inner_match.group(1)
-                inner_unlabelled = inner_match.group(2)
-                if inner_labelled:
-                    assertions.append(clean_assertion(inner_labelled))
-                elif inner_unlabelled:
-                    assertions.append(clean_assertion(inner_unlabelled))
-        elif labelled_assertion:
-            assertions.append(clean_assertion(labelled_assertion))
-        elif unlabelled_assertion:
-            assertions.append(clean_assertion(unlabelled_assertion))
-            
-    return assertions
+    return cleaned_assertions
 
 def generate_formal_verification_code(assertions: List[str], rtl_code: str) -> str:
     """
@@ -748,6 +718,21 @@ def generate_formal_verification_code(assertions: List[str], rtl_code: str) -> s
                 else:
                     print(f"    → Original also invalid, skipping this assertion")
                     continue
+            
+            # WORKAROUND for LLM stripping generate blocks
+            # If the original was a generate block and the refined one is not, re-wrap it.
+            if assertion_clean.lower().startswith('generate') and not refined.lower().startswith('generate'):
+                print("  ✓ Re-wrapping stripped generate block...")
+                # Extract the full generate and for loop structure
+                # This is more robust than the previous implementation.
+                gen_for_match = re.search(r'generate\s+for\s*\(.*?\)\s*begin', assertion_clean, re.DOTALL)
+                if gen_for_match:
+                    refined = f"{gen_for_match.group(0)}\n    {refined}\nend\nendgenerate"
+                else:
+                    # Fallback for generate without for loop
+                    refined = f"generate\n    {refined}\nendgenerate"
+                
+                print(f"    → Re-wrapped: {refined[:100]}...")
 
             # Final validation after signal updates
             if not validate_assertion(refined):
