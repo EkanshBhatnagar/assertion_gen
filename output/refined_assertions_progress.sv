@@ -15,10 +15,14 @@ assert property (@(posedge clk) (full && wr_en) |-> overflow);
 as__fifo_underflow: assert property (@(posedge clk) disable iff (!rst_n) (rd_en && empty) |-> underflow);
 
 // Assertion 4
+// Human description: 6. When a successful write occurs (wr_en high and not full), the same data should appear on data_out after FIFO_DEPTH-1 successive reads, assuming no other writes occur.
+assert property (@(posedge clk) wr_en && !full |-> ##(FIFO_DEPTH-1) (!wr_en [*FIFO_DEPTH-1]) ##1 rd_en && !empty |-> data_out == $past(data_in, FIFO_DEPTH));
+
+// Assertion 5
 // Human description: 7. When a successful write occurs (wr_en high and not full), wr_ack should be high on the next cycle.
 as__wr_ack_next_cycle: assert property (@(posedge clk) disable iff (!rst_n) (wr_en && !full) |=> wr_ack);
 
-// Assertion 5
+// Assertion 6
 // Human description: 11. When a read and write are attempted simultaneously on an empty FIFO, the write should succeed (data stored and wr_ack high) on the next cycle.
 as__write_succeeds_on_simultaneous_read_write_empty: assert property (@(posedge clk) disable iff (!rst_n) (rd_en && wr_en && empty) |=> wr_ack);
 

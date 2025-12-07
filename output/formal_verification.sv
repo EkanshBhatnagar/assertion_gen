@@ -22,9 +22,10 @@
 module FIFO_tb;
 
     // Parameters
+    parameter FIFO_WIDTH = 16;
+    parameter FIFO_DEPTH = 8;
     parameter WIDTH = 8;
     parameter DEPTH = 16;
-    parameter FIFO_DEPTH = 16;
 
     // Port declarations (as logic)
     logic data_in;
@@ -43,8 +44,7 @@ module FIFO_tb;
 
     // DUT Instantiation
     FIFO #(
-        .WIDTH(WIDTH),
-        .DEPTH(DEPTH),
+        .FIFO_WIDTH(FIFO_WIDTH),
         .FIFO_DEPTH(FIFO_DEPTH)
     ) DUT (
         .data_in(data_in),
@@ -74,6 +74,8 @@ module FIFO_tb;
     assert property (@(posedge clk) (full && wr_en) |-> overflow);
 
     as__fifo_underflow: assert property (@(posedge clk) disable iff (!rst_n) (rd_en && empty) |-> underflow);
+
+    assert property (@(posedge clk) wr_en && !full |-> ##(FIFO_DEPTH-1) (!wr_en [*FIFO_DEPTH-1]) ##1 rd_en && !empty |-> data_out == $past(data_in, FIFO_DEPTH));
 
     as__wr_ack_next_cycle: assert property (@(posedge clk) disable iff (!rst_n) (wr_en && !full) |=> wr_ack);
 

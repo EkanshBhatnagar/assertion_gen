@@ -3,6 +3,7 @@ import re
 import os
 from typing import List, Tuple
 from example_loader import load_examples_from_directory, get_quality_assertions
+from config import config
 
 class SimpleAssertionFix(dspy.Signature):
     """
@@ -63,69 +64,84 @@ def extract_signal_info(rtl_code: str) -> tuple:
     module_match = re.search(r'module\s+(\w+)', rtl_code)
     module_name = module_match.group(1) if module_match else "unknown"
 
-    # Extract parameters with types and values (deduplicate)
     params = []
     param_names_seen = set()
 
-    # Regex to find the module declaration and extract the parameter block and port list
-    module_decl_match = re.search(r'module\s+(\w+)\s*(#\s*\((.*?)\))?\s*\((.*?)\);', rtl_code, re.DOTALL)
-    if module_decl_match:
-        module_name = module_decl_match.group(1)
-        param_block_str = module_decl_match.group(3)  # Content of #(...)
-        port_list_str = module_decl_match.group(4)    # Content of (...)
+    # 1. Find parameters in module header, e.g., # (parameter WIDTH = 8)
+    module_header_match = re.search(r'module\s+\w+\s*#\s*\((.*?)\)', rtl_code, re.DOTALL)
+    if module_header_match:
+        param_block_str = module_header_match.group(1)
+        # Pattern for "parameter TYPE NAME = VALUE" or "parameter NAME = VALUE"
+        header_param_pattern = r'parameter\s+(?:\w+\s+)?(\w+)\s*=\s*([^,)]+)'
+        for match in re.findall(header_param_pattern, param_block_str):
+            param_name, param_value = match
+            if param_name not in param_names_seen:
+                param_names_seen.add(param_name)
+                # For simplicity, type is inferred as 'int' when not specified
+                params.append({
+                    'name': param_name,
+                    'value': param_value.strip(),
+                    'type': 'int' 
+                })
 
-        if param_block_str:
-            # Now parse parameters from param_block_str
-            # Capture until a comma or the end of the block
-            param_pattern = r'parameter\s+(?:(\w+)\s+)?(\w+)\s*=\s*([^,)]+)'
-            param_matches = re.findall(param_pattern, param_block_str)
-            for match in param_matches:
-                param_type, param_name, param_value = match
-                if param_name not in param_names_seen:
-                    param_names_seen.add(param_name)
-                    params.append({
-                        'name': param_name,
-                        'value': param_value.strip(),
-                        'type': param_type.strip() if param_type.strip() else 'int'
-                    })
+    # 2. Find parameters declared directly in the module body (Verilog-2001 style)
+    # To avoid parsing outside the main module, we first get the module body
+    module_body_match = re.search(r'module\s+\w+\s*.*?;(.*?)endmodule', rtl_code, re.DOTALL)
+    if module_body_match:
+        module_body = module_body_match.group(1)
+        body_param_pattern = r'^\s*parameter\s+(?:(\w+)\s+)?(\w+)\s*=\s*([^;]+);'
+        for match in re.findall(body_param_pattern, module_body, re.MULTILINE):
+            param_type, param_name, param_value = match
+            if param_name not in param_names_seen:
+                param_names_seen.add(param_name)
+                params.append({
+                    'name': param_name,
+                    'value': param_value.strip(),
+                    'type': param_type.strip() if param_type.strip() else 'int'
+                })
 
-        # Extract port declarations (input, output) from port_list_str
-        inputs = []
-        outputs = []
-        all_ports = [] # To store all port dictionaries
+    # Extract port declarations (input, output)
+    inputs = []
+    outputs = []
+    all_ports = [] # To store all port dictionaries
 
-        if port_list_str:
-            # Split by comma to get individual port declarations
-            individual_ports = [p.strip() for p in port_list_str.split(',') if p.strip()]
+    port_list_str = ""
+    port_list_match = re.search(r'module\s+\w+\s*(?:#\s*\(.*?\))?\s*\((.*?)\);', rtl_code, re.DOTALL)
+    if port_list_match:
+        port_list_str = port_list_match.group(1)
 
-            for port_decl in individual_ports:
-                # Try to match input ports
-                input_match = re.match(r'input\s+(?:logic|wire|reg)?\s*(\[[\w\-:+\s\$]+\])?\s*(\w+)', port_decl)
-                if input_match:
-                    width = input_match.group(1)
-                    name = input_match.group(2)
-                    inputs.append({'name': name, 'width': width.strip() if width else ''})
-                    all_ports.append({'name': name, 'width': width.strip() if width else '', 'direction': 'input'})
-                    continue
+    if port_list_str:
+        # Split by comma to get individual port declarations
+        individual_ports = [p.strip() for p in port_list_str.split(',') if p.strip()]
 
-                # Try to match output ports
-                output_match = re.match(r'output\s+(?:logic|wire|reg)?\s*(\[[\w\-:+\s\$]+\])?\s*(\w+)', port_decl)
-                if output_match:
-                    width = output_match.group(1)
-                    name = output_match.group(2)
-                    outputs.append({'name': name, 'width': width.strip() if width else ''})
-                    all_ports.append({'name': name, 'width': width.strip() if width else '', 'direction': 'output'})
-                    continue
+        for port_decl in individual_ports:
+            # Try to match input ports
+            input_match = re.match(r'input\s+(?:logic|wire|reg)?\s*(\[[\w\-:+\s\$]+\])?\s*(\w+)', port_decl)
+            if input_match:
+                width = input_match.group(1)
+                name = input_match.group(2)
+                inputs.append({'name': name, 'width': width.strip() if width else ''})
+                all_ports.append({'name': name, 'width': width.strip() if width else '', 'direction': 'input'})
+                continue
 
-                # If it's not explicitly input/output, it might be an inout or implicitly declared
-                # For simplicity, we'll try to extract just the name if not matched yet
-                name_match = re.match(r'(?:logic|wire|reg)?\s*(\[[\w\-:+\s\$]+\])?\s*(\w+)', port_decl)
-                if name_match:
-                    width = name_match.group(1)
-                    name = name_match.group(2)
-                    # If not already added as input/output, assume it's part of all_ports for now
-                    if name not in {p['name'] for p in all_ports}:
-                        all_ports.append({'name': name, 'width': width.strip() if width else '', 'direction': 'inout/implicit'})
+            # Try to match output ports
+            output_match = re.match(r'output\s+(?:logic|wire|reg)?\s*(\[[\w\-:+\s\$]+\])?\s*(\w+)', port_decl)
+            if output_match:
+                width = output_match.group(1)
+                name = output_match.group(2)
+                outputs.append({'name': name, 'width': width.strip() if width else ''})
+                all_ports.append({'name': name, 'width': width.strip() if width else '', 'direction': 'output'})
+                continue
+
+            # If it's not explicitly input/output, it might be an inout or implicitly declared
+            # For simplicity, we'll try to extract just the name if not matched yet
+            name_match = re.match(r'(?:logic|wire|reg)?\s*(\[[\w\-:+\s\$]+\])?\s*(\w+)', port_decl)
+            if name_match:
+                width = name_match.group(1)
+                name = name_match.group(2)
+                # If not already added as input/output, assume it's part of all_ports for now
+                if name not in {p['name'] for p in all_ports}:
+                    all_ports.append({'name': name, 'width': width.strip() if width else '', 'direction': 'inout/implicit'})
 
     # Extract internal registers and wires
     internals = []
@@ -136,16 +152,18 @@ def extract_signal_info(rtl_code: str) -> tuple:
         r'(?:^|\n)\s*reg\s+(\[[\w\-:+\s]+\])?\s*(\w+)\s*[^;]*;',
         r'(?:^|\n)\s*wire\s+(\[[\w\-:+\s]+\])?\s*(\w+)\s*[^;]*;'
     ]
-    for pattern in internal_patterns:
-        matches = re.findall(pattern, rtl_code, re.MULTILINE)
-        for match in matches:
-            width, name = match
-            # Ensure it's not a port or a parameter
-            if name not in port_names_set and name not in param_names_seen and name not in {i['name'] for i in internals}:
-                internals.append({
-                    'name': name,
-                    'width': width.strip() if width else ''
-                })
+    if module_body_match:
+        module_body_for_internals = module_body_match.group(1)
+        for pattern in internal_patterns:
+            matches = re.findall(pattern, module_body_for_internals, re.MULTILINE)
+            for match in matches:
+                width, name = match
+                # Ensure it's not a port or a parameter
+                if name not in port_names_set and name not in param_names_seen and name not in {i['name'] for i in internals}:
+                    internals.append({
+                        'name': name,
+                        'width': width.strip() if width else ''
+                    })
 
     signal_info = f"""
 Module: {module_name}
@@ -337,35 +355,31 @@ def extract_assertion_from_thinking(output: str) -> str:
     # Last resort: return as-is (will be caught downstream)
     return cleaned
 
-def generate_testbench_code(module_name: str, ports: List[dict], params: List[dict],
-                            internals: List[dict], assertions: str) -> str:
+def generate_testbench_code(module_name: str, ports: List[dict], all_params: List[dict],
+                            dut_params: List[dict], internals: List[dict], assertions: str) -> str:
     """
     Generate a complete testbench with DUT instantiation and assertions.
 
     Args:
-        module_name: Name of the RTL module
-        ports: List of port dictionaries with 'name' and 'width'
-        params: List of parameter dictionaries with 'name', 'value', 'type'
-        internals: List of internal signal dictionaries
-        assertions: String containing all assertions
+        module_name: Name of the RTL module.
+        ports: List of port dictionaries.
+        all_params: All parameters for the testbench (DUT + assertion-specific).
+        dut_params: Parameters specific to the DUT for instantiation.
+        internals: List of internal signal dictionaries.
+        assertions: String containing all assertions.
 
     Returns:
-        Complete testbench code
+        Complete testbench code.
     """
-    # Generate parameter declarations
-    param_decls = []
-    param_assigns = []
-    for p in params:
-        param_decls.append(f"    parameter {p['name']} = {p['value']};")
-        param_assigns.append(f"        .{p['name']}({p['name']})")
+    # Generate parameter declarations for all parameters in the testbench body
+    param_decls = [f"    parameter {p['name']} = {p['value']};" for p in all_params]
+
+    # Generate parameter assignments ONLY for DUT-specific parameters
+    param_assigns = [f"        .{p['name']}({p['name']})" for p in dut_params]
 
     # Generate logic declarations for ports
-    port_decls = []
-    port_connections = []
-    for port in ports:
-        width_str = f"{port['width']} " if port['width'] else ""
-        port_decls.append(f"    logic {width_str}{port['name']};")
-        port_connections.append(f"        .{port['name']}({port['name']})")
+    port_decls = [f"    logic {port['width'] if port['width'] else ''}{port['name']};" for port in ports]
+    port_connections = [f"        .{port['name']}({port['name']})" for port in ports]
 
     # Build testbench
     testbench = f"""////////////////////////////////////////////////////////////////////////////////
@@ -430,7 +444,7 @@ def validate_signals_exist(assertion: str, ports: List[dict], internals: List[di
     sv_functions = {'past', 'rose', 'fell', 'stable', 'countones'} # System functions that don't start with '$'
     sv_system_tasks_functions_with_dollar = {'onehot', 'onehot0', 'changed', 'stable', 'past', 'fell', 'rose', 'isunknown'} # Common system functions that start with '$'
     # Common references that are not signals but should not be flagged as undefined
-    common_ignored_identifiers = {'clk', 'rst_n', 'DUT', 'fifo', 'FIFO', 'i', 'b1', 'WIDTH', 'NUM_REQS', 'CLIENTS'} # Added i, b1, WIDTH, NUM_REQS, CLIENTS
+    common_ignored_identifiers = {'clk', 'rst_n', 'DUT', 'fifo', 'FIFO', 'i', 'b1', 'WIDTH', 'NUM_REQS', 'CLIENTS', 'FIFO_WIDTH', 'FIFO_DEPTH'} # Added i, b1, WIDTH, NUM_REQS, CLIENTS
 
     # Find all identifiers in the assertion, including those starting with '$'
     identifiers = re.findall(r'\b[\w$]+\b', assertion_no_label)
@@ -596,27 +610,21 @@ def generate_formal_verification_code(assertions: List[str], rtl_code: str) -> T
     quality_examples = get_quality_assertions(examples_data, count=10)
     print(f"Loaded {len(quality_examples)} quality examples for reference\n")
 
-    # Extract signal information from RTL
-    signal_info, module_name, ports, params, internals = extract_signal_info(rtl_code)
+    # Extract signal information from RTL to get DUT-specific parameters
+    signal_info, module_name, ports, dut_params, internals = extract_signal_info(rtl_code)
 
     print(f"\nDetected module: {module_name}")
-    print(f"  Parameters: {len(params)}")
+    print(f"  DUT Parameters: {len(dut_params)}")
     print(f"  Ports: {len(ports)}")
     print(f"  Internal signals: {len(internals)}")
     print(f"\nSignal Information:\n{signal_info}")
-
-    # Add examples to signal info as reference
-    examples_text = "\n\nReference Examples (High-Quality SVA):\n"
-    for i, ex in enumerate(quality_examples[:5], 1):
-        examples_text += f"{i}. {ex}\n\n"
-    signal_info_with_examples = signal_info + examples_text
 
     # Load human language descriptions from stage 1
     human_descriptions = load_human_descriptions()
     print(f"\nLoaded {len(human_descriptions)} human language descriptions from stage 1")
 
     # --- Parameter Extraction Step ---
-    found_param_decls = []
+    assertion_params = []
     assertions_no_params = []
     for assertion in assertions:
         lines = assertion.split('\n')
@@ -625,8 +633,13 @@ def generate_formal_verification_code(assertions: List[str], rtl_code: str) -> T
             stripped_line = line.strip()
             if stripped_line.startswith("// parameter:"):
                 param_decl = stripped_line.replace("// parameter:", "").strip()
-                if param_decl not in found_param_decls:
-                    found_param_decls.append(param_decl)
+                match = re.search(r'parameter\s+(\w+)\s*=\s*([^;]+);', param_decl)
+                if match:
+                    param_name = match.group(1)
+                    param_value = match.group(2).strip()
+                    # Avoid duplicates
+                    if not any(p['name'] == param_name for p in assertion_params):
+                        assertion_params.append({'name': param_name, 'value': param_value, 'type': 'int'})
             else:
                 assertion_only_lines.append(line)
         assertions_no_params.append("\n".join(assertion_only_lines))
@@ -825,21 +838,16 @@ def generate_formal_verification_code(assertions: List[str], rtl_code: str) -> T
         indented_lines = ['    ' + line if line.strip() else '' for line in lines]
         assertions_indented.append('\n'.join(indented_lines))
 
-    all_assertions = "\n\n".join(assertions_indented)
+    all_assertions_str = "\n\n".join(assertions_indented)
 
-    # --- Parameter Augmentation Step ---
-    existing_param_names = {p['name'] for p in params}
-    for param_decl in found_param_decls:
-        # Expected format: "parameter NAME = VALUE;"
-        match = re.search(r'parameter\s+(\w+)\s*=\s*([^;]+);', param_decl)
-        if match:
-            param_name = match.group(1)
-            param_value = match.group(2).strip()
-            if param_name not in existing_param_names:
-                params.append({'name': param_name, 'value': param_value, 'type': 'int'}) # Assume int for simplicity
-                existing_param_names.add(param_name)
-                print(f"  Discovered and added new parameter: {param_name}={param_value}")
-
+    # --- Combine Parameters ---
+    all_params = list(dut_params)
+    all_param_names = {p['name'] for p in all_params}
+    for p in assertion_params:
+        if p['name'] not in all_param_names:
+            all_params.append(p)
+            all_param_names.add(p['name'])
+            print(f"  Discovered and added new assertion parameter: {p['name']}={p['value']}")
 
     # Generate testbench code
     print("\n" + "="*80)
@@ -850,13 +858,14 @@ def generate_formal_verification_code(assertions: List[str], rtl_code: str) -> T
         testbench_code = generate_testbench_code(
             module_name=module_name,
             ports=ports,
-            params=params,
+            all_params=all_params,
+            dut_params=dut_params,
             internals=internals,
-            assertions=all_assertions
+            assertions=all_assertions_str
         )
         print("✓ Testbench generated successfully")
         print(f"  - Module: {module_name}_tb")
-        print(f"  - Parameters: {len(params)}")
+        print(f"  - Parameters: {len(all_params)}")
         print(f"  - Ports: {len(ports)}")
         print(f"  - DUT instance: DUT")
         print(f"  - Assertions: {len(refined_assertions)}")
@@ -871,7 +880,7 @@ module {module_name}_tb;
     // DUT instantiation here
 
     // Assertions
-{all_assertions}
+{all_assertions_str}
 
 endmodule
 """
@@ -899,8 +908,8 @@ endmodule
 ////////////////////////////////////////////////////////////////////////////////
 """
 
-    print(f"\nℹ️  Incremental progress available in: {progress_file}")
-    return formal_code, params
+    print(f"\nℹ️  Incremental progress available in: {config.progress_file}")
+    return formal_code, all_params
 
 if __name__ == "__main__":
     # Test the module independently
