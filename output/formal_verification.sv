@@ -19,18 +19,9 @@
 // Contains DUT instantiation and formal verification assertions
 ////////////////////////////////////////////////////////////////////////////////
 
-module rr_arbiter_tb;
-
-    // Parameters
-    parameter CLIENTS = 4
-)(
-    input  logic                 clk,
-    input  logic                 rst_n,
-    input  logic [CLIENTS-1:0]   req,
-    output logic [CLIENTS-1:0]   gnt
+module rr_arbiter_tb #(
+    parameter CLIENTS = 4, parameter NUM_REQS = 4, parameter WIDTH = 8
 );
-    parameter NUM_REQS = 4;
-    parameter WIDTH = 8;
 
     // Port declarations (as logic)
     logic clk;

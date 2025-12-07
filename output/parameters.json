@@ -1,7 +1,7 @@
 [
     {
         "name": "CLIENTS",
-        "value": "4\n)(\n    input  logic                 clk,\n    input  logic                 rst_n,\n    input  logic [CLIENTS-1:0]   req,\n    output logic [CLIENTS-1:0]   gnt\n)",
+        "value": "4",
         "type": "int"
     },
     {

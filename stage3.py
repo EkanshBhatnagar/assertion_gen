@@ -66,58 +66,66 @@ def extract_signal_info(rtl_code: str) -> tuple:
     # Extract parameters with types and values (deduplicate)
     params = []
     param_names_seen = set()
-    param_pattern = r'parameter\s+(?:(\w+)\s+)?(\w+)\s*=\s*([^;]+);'
-    matches = re.findall(param_pattern, rtl_code)
-    for match in matches:
-        param_type, param_name, param_value = match
-        if param_name not in param_names_seen:
-            param_names_seen.add(param_name)
-            params.append({
-                'name': param_name,
-                'value': param_value.strip(),
-                'type': param_type.strip() if param_type.strip() else 'int'
-            })
 
-    # Extract port declarations (input, output)
-    inputs = []
-    outputs = []
-    all_ports = [] # To store all port dictionaries
-
-    # Regex to find the port list, handling optional parameters block
-    module_decl_match = re.search(r'module\s+\w+\s*(?:#\s*\([^)]*\))?\s*\((.*?)\);', rtl_code, re.DOTALL)
+    # Regex to find the module declaration and extract the parameter block and port list
+    module_decl_match = re.search(r'module\s+(\w+)\s*(#\s*\((.*?)\))?\s*\((.*?)\);', rtl_code, re.DOTALL)
     if module_decl_match:
-        port_list_str = module_decl_match.group(1)
-        # Split by comma to get individual port declarations
-        individual_ports = [p.strip() for p in port_list_str.split(',') if p.strip()]
+        module_name = module_decl_match.group(1)
+        param_block_str = module_decl_match.group(3)  # Content of #(...)
+        port_list_str = module_decl_match.group(4)    # Content of (...)
 
-        for port_decl in individual_ports:
-            # Try to match input ports
-            input_match = re.match(r'input\s+(?:logic|wire|reg)?\s*(\[[\w\-:+\s\$]+\])?\s*(\w+)', port_decl)
-            if input_match:
-                width = input_match.group(1)
-                name = input_match.group(2)
-                inputs.append({'name': name, 'width': width.strip() if width else ''})
-                all_ports.append({'name': name, 'width': width.strip() if width else '', 'direction': 'input'})
-                continue
+        if param_block_str:
+            # Now parse parameters from param_block_str
+            # Capture until a comma or the end of the block
+            param_pattern = r'parameter\s+(?:(\w+)\s+)?(\w+)\s*=\s*([^,)]+)'
+            param_matches = re.findall(param_pattern, param_block_str)
+            for match in param_matches:
+                param_type, param_name, param_value = match
+                if param_name not in param_names_seen:
+                    param_names_seen.add(param_name)
+                    params.append({
+                        'name': param_name,
+                        'value': param_value.strip(),
+                        'type': param_type.strip() if param_type.strip() else 'int'
+                    })
 
-            # Try to match output ports
-            output_match = re.match(r'output\s+(?:logic|wire|reg)?\s*(\[[\w\-:+\s\$]+\])?\s*(\w+)', port_decl)
-            if output_match:
-                width = output_match.group(1)
-                name = output_match.group(2)
-                outputs.append({'name': name, 'width': width.strip() if width else ''})
-                all_ports.append({'name': name, 'width': width.strip() if width else '', 'direction': 'output'})
-                continue
+        # Extract port declarations (input, output) from port_list_str
+        inputs = []
+        outputs = []
+        all_ports = [] # To store all port dictionaries
 
-            # If it's not explicitly input/output, it might be an inout or implicitly declared
-            # For simplicity, we'll try to extract just the name if not matched yet
-            name_match = re.match(r'(?:logic|wire|reg)?\s*(\[[\w\-:+\s\$]+\])?\s*(\w+)', port_decl)
-            if name_match:
-                width = name_match.group(1)
-                name = name_match.group(2)
-                # If not already added as input/output, assume it's part of all_ports for now
-                if name not in {p['name'] for p in all_ports}:
-                    all_ports.append({'name': name, 'width': width.strip() if width else '', 'direction': 'inout/implicit'})
+        if port_list_str:
+            # Split by comma to get individual port declarations
+            individual_ports = [p.strip() for p in port_list_str.split(',') if p.strip()]
+
+            for port_decl in individual_ports:
+                # Try to match input ports
+                input_match = re.match(r'input\s+(?:logic|wire|reg)?\s*(\[[\w\-:+\s\$]+\])?\s*(\w+)', port_decl)
+                if input_match:
+                    width = input_match.group(1)
+                    name = input_match.group(2)
+                    inputs.append({'name': name, 'width': width.strip() if width else ''})
+                    all_ports.append({'name': name, 'width': width.strip() if width else '', 'direction': 'input'})
+                    continue
+
+                # Try to match output ports
+                output_match = re.match(r'output\s+(?:logic|wire|reg)?\s*(\[[\w\-:+\s\$]+\])?\s*(\w+)', port_decl)
+                if output_match:
+                    width = output_match.group(1)
+                    name = output_match.group(2)
+                    outputs.append({'name': name, 'width': width.strip() if width else ''})
+                    all_ports.append({'name': name, 'width': width.strip() if width else '', 'direction': 'output'})
+                    continue
+
+                # If it's not explicitly input/output, it might be an inout or implicitly declared
+                # For simplicity, we'll try to extract just the name if not matched yet
+                name_match = re.match(r'(?:logic|wire|reg)?\s*(\[[\w\-:+\s\$]+\])?\s*(\w+)', port_decl)
+                if name_match:
+                    width = name_match.group(1)
+                    name = name_match.group(2)
+                    # If not already added as input/output, assume it's part of all_ports for now
+                    if name not in {p['name'] for p in all_ports}:
+                        all_ports.append({'name': name, 'width': width.strip() if width else '', 'direction': 'inout/implicit'})
 
     # Extract internal registers and wires
     internals = []
@@ -344,12 +352,18 @@ def generate_testbench_code(module_name: str, ports: List[dict], params: List[di
     Returns:
         Complete testbench code
     """
-    # Generate parameter declarations
-    param_decls = []
+    # Generate parameter declarations for the module header
+    param_header_decls = []
     param_assigns = []
     for p in params:
-        param_decls.append(f"    parameter {p['name']} = {p['value']};")
+        param_header_decls.append(f"parameter {p['name']} = {p['value']}")
         param_assigns.append(f"        .{p['name']}({p['name']})")
+
+    # If there are parameters, format them for the module header
+    if param_header_decls:
+        params_in_header = f" #(\n    {', '.join(param_header_decls)}\n)"
+    else:
+        params_in_header = ""
 
     # Generate logic declarations for ports
     port_decls = []
@@ -366,10 +380,7 @@ def generate_testbench_code(module_name: str, ports: List[dict], params: List[di
 // Contains DUT instantiation and formal verification assertions
 ////////////////////////////////////////////////////////////////////////////////
 
-module {module_name}_tb;
-
-    // Parameters
-{chr(10).join(param_decls) if param_decls else "    // No parameters"}
+module {module_name}_tb{params_in_header};
 
     // Port declarations (as logic)
 {chr(10).join(port_decls)}
