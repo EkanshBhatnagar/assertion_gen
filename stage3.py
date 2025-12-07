@@ -352,18 +352,12 @@ def generate_testbench_code(module_name: str, ports: List[dict], params: List[di
     Returns:
         Complete testbench code
     """
-    # Generate parameter declarations for the module header
-    param_header_decls = []
+    # Generate parameter declarations
+    param_decls = []
     param_assigns = []
     for p in params:
-        param_header_decls.append(f"parameter {p['name']} = {p['value']}")
+        param_decls.append(f"    parameter {p['name']} = {p['value']};")
         param_assigns.append(f"        .{p['name']}({p['name']})")
-
-    # If there are parameters, format them for the module header
-    if param_header_decls:
-        params_in_header = f" #(\n    {', '.join(param_header_decls)}\n)"
-    else:
-        params_in_header = ""
 
     # Generate logic declarations for ports
     port_decls = []
@@ -380,7 +374,10 @@ def generate_testbench_code(module_name: str, ports: List[dict], params: List[di
 // Contains DUT instantiation and formal verification assertions
 ////////////////////////////////////////////////////////////////////////////////
 
-module {module_name}_tb{params_in_header};
+module {module_name}_tb;
+
+    // Parameters
+{chr(10).join(param_decls) if param_decls else "    // No parameters"}
 
     // Port declarations (as logic)
 {chr(10).join(port_decls)}
