@@ -766,11 +766,20 @@ def generate_formal_verification_code(assertions: List[str], rtl_code: str) -> T
                 # This is more robust than the previous implementation.
                 gen_for_match = re.search(r'generate\s+for\s*\(.*?\)\s*begin', assertion_clean, re.DOTALL)
                 if gen_for_match:
-                    refined = f"{gen_for_match.group(0)}\n    {refined}\nend\nendgenerate"
+                    refined = f"{gen_for_match.group(0)}\n        {refined}\n    end\n    endgenerate"
                 else:
-                    # Fallback for generate without for loop
-                    refined = f"generate\n    {refined}\nendgenerate"
-                
+                    # Check if the refined assertion uses array indexing (e.g., gnt[i], req[i])
+                    # If so, it needs a proper for loop
+                    if re.search(r'\[\s*i\s*\]', refined):
+                        print("    → Detected array indexing [i], adding for loop...")
+                        # Default for loop - use NUM_REQS or CLIENTS parameter
+                        # Try to infer the parameter from the signal context
+                        for_loop = "for (genvar i = 0; i < NUM_REQS; i++) begin"
+                        refined = f"generate\n        {for_loop}\n        {refined}\n    end\n    endgenerate"
+                    else:
+                        # Fallback for generate without for loop
+                        refined = f"generate\n        {refined}\n    endgenerate"
+
                 print(f"    → Re-wrapped: {refined[:100]}...")
 
             # Final validation after signal updates

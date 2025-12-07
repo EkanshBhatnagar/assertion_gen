@@ -1,22 +1,17 @@
 [
     {
-        "name": "FIFO_WIDTH",
-        "value": "16",
+        "name": "CLIENTS",
+        "value": "4",
         "type": "int"
     },
     {
-        "name": "FIFO_DEPTH",
-        "value": "8",
+        "name": "NUM_REQS",
+        "value": "4",
         "type": "int"
     },
     {
         "name": "WIDTH",
         "value": "8",
-        "type": "int"
-    },
-    {
-        "name": "DEPTH",
-        "value": "16",
         "type": "int"
     }
 ]
