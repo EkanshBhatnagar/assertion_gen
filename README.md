@@ -25,3 +25,13 @@ uv run main.py --all --rtl design/FIFO.sv --spec design/specification_fifo.md --
 ```
 
 The first command targets the arbiter design (top module `rr_arbiter`), while the second runs against the FIFO design. The `--all` flag ensures every stage executes in sequence, using OpenRouter for the earlier stages and the local LM Studio model for stage 3/4.
+
+## Running JasperGold on Olympus Server
+After cloining the repository, run the following commands from the root directory.
+
+```
+load-research
+source /opt/coe/cadence/JASPERGOLD240/setup.JASPERGOLD240.linux.bash
+
+jg output/jaspergold_fpv.tcl
+```
