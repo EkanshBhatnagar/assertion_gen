@@ -1,28 +1,41 @@
-// parameter: parameter NUM_REQS = 4;
-assert property (@(posedge clk) $onehot0(gnt)) else $error("More than one grant asserted simultaneously");
+assert property (@(posedge clk) $rose(rst_n) |=> empty);
+
+@(posedge clk) 
+    assert property (!reset |=> !full && !almost_full);
 
 // parameter: parameter WIDTH = 8;
-generate
-    for (genvar i = 0; i < WIDTH; i++) begin
-        as__gnt_implies_req: 
-            assert property (@(posedge clk) disable iff (!rst_n)
-                gnt[i] |-> req[i]
-            );
-    end
-endgenerate
+// parameter: parameter DEPTH = 16;
+@(posedge clk)
+assert property (
+    (wr_en && full) |=> (rd_data != $past(wr_data))
+);
 
-as__req_gnt_same_cycle: assert property (|req |-> |gnt);
+assert property (@(posedge clk) (full && wr_en) |-> overflow);
 
-// parameter: parameter NUM_REQS = 4;
-generate
-    for (genvar i = 0; i < NUM_REQS; i++) begin
-        as__round_robin_fairness:
-            assert property ($past(gnt[i]) && req[i] |=> gnt[i] && ($countones(gnt) < $countones(req)));
-    end
-endgenerate
+as__fifo_underflow: assert property (@(posedge clk) disable iff (!rst_n) (rd_en && empty) |-> underflow);
 
-assert property (@(posedge clk) disable iff (~rst_n) !rst_n |-> (gnt == '0));
+// parameter: parameter FIFO_DEPTH = 16;
+assert property (@(posedge clk) 
+    wr_en && !full |-> ##(FIFO_DEPTH-1) 
+        (!wr_en [*FIFO_DEPTH-1]) ##1 rd_en && !empty |-> data_out == $past(data_in, FIFO_DEPTH));
 
-as__gnt_valid_same_cycle_as_req_change: 
-    assert property (@(posedge clk) disable iff (!rst_n) $changed(req) |-> gnt);
+as__wr_ack_next_cycle: assert property (@(posedge clk) disable iff (!rst_n) 
+                                        (wr_en && !full) |=> wr_ack);
+
+// parameter: parameter DEPTH = 16;
+as__fifo_almost_full: assert property (
+    @(posedge clk) disable iff (!rst_n)
+    (fifo.wr_ptr - fifo.rd_ptr == DEPTH - 1) |-> fifo.almost_full
+);
+
+// parameter: parameter DEPTH = 8;
+assert property (@(posedge clk) (wr_ptr - rd_ptr == 1) |-> almost_empty);
+
+as__read_succeeds_on_full_fifo_conflict:
+    assert property (@(posedge clk) disable iff (!rst_n)
+        (rd_en && wr_en && full) |=> (data_out_valid && rd_ack));
+
+as__write_succeeds_on_simultaneous_read_write_empty:
+    assert property (@(posedge clk) disable iff (!rst_n)
+        (rd_en && wr_en && empty) |=> wr_ack);
 

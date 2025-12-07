@@ -8,9 +8,12 @@ class EnglishAssertionToSystemVerilog(dspy.Signature):
     Given a plain English assertion statement, generate a correct SystemVerilog assertion.
 
     Follow these guidelines:
-    1. Use proper SystemVerilog assertion syntax with 'assert property'
+    1. Use proper SystemVerilog assertion syntax with 'assert property'.
+    2. Every assertion property MUST be clocked. Start the property expression with a clock event, e.g., `@(posedge clk)`.
+    3. The `$past` system function takes only ONE signal as an argument (e.g., `$past(my_signal)`, NOT `$past(sig1, sig2)`).
+    4. Property expressions (both sides of `|->` or `|=>`) must be valid boolean expressions. They CANNOT be comma-separated lists of signals.
 
-    2. **CRITICAL - Choose correct temporal operator based on timing:**
+    5. **CRITICAL - Choose correct temporal operator based on timing:**
        - |-> (SAME cycle): When condition and result happen SIMULTANEOUSLY/IMMEDIATELY
          Keywords: "same cycle", "immediately", "when", "if", "implies"
          Example: "When count equals depth, full is high" -> (count == DEPTH) |-> full
@@ -23,16 +26,16 @@ class EnglishAssertionToSystemVerilog(dspy.Signature):
          Keywords: "N cycles later", "after N cycles"
          Example: "2 cycles after req, ack is high" -> req ##2 ack
 
-    3. **Parse timing keywords carefully:**
+    6. **Parse timing keywords carefully:**
        - "next" = |=> (one cycle delay)
        - No timing word + continuous/combinational logic = |-> (same cycle)
 
-    4. Use system functions: $past, $stable, $countones, $rose, $fell
-    5. Use s_eventually for liveness properties
-    6. Name assertions with prefixes: as__ (assert), am__ (assume), co__ (cover)
-    7. For parameterized assertions, use generate blocks
-    8. Reference signals with hierarchical paths when needed (module.signal)
-    9. If you use a `generate` block with parameters (e.g., `WIDTH`, `DEPTH`, `NUM_REQS`), you MUST declare them in the `required_parameters` output field.
+    7. Use system functions: $past, $stable, $countones, $rose, $fell
+    8. Use s_eventually for liveness properties
+    9. Name assertions with prefixes: as__ (assert), am__ (assume), co__ (cover)
+    10. For parameterized assertions, use generate blocks
+    11. Reference signals with hierarchical paths when needed (module.signal)
+    12. If you use a `generate` block with parameters (e.g., `WIDTH`, `DEPTH`, `NUM_REQS`), you MUST declare them in the `required_parameters` output field.
        List each parameter on a new line, e.g., "parameter WIDTH = 8;\nparameter DEPTH = 32;".
        Provide a sensible default value.
     """
